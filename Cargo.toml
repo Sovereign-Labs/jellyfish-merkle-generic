@@ -10,6 +10,7 @@ hex = "0.4.3"
 proptest = { version = "1.0.0", optional = true }
 proptest-derive = { version = "0.3.0", optional = true }
 serde = { version = "1.0.137", features = ["derive"] }
+thiserror = "1.0.31"
 
 [dev-dependencies]
 proptest = "1.0.0"

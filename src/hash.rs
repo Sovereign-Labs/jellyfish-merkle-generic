@@ -394,3 +394,7 @@ impl<'a, const N: usize> std::iter::DoubleEndedIterator for HashValueBitIterator
 }
 
 impl<'a, const N: usize> std::iter::ExactSizeIterator for HashValueBitIterator<'a, N> {}
+
+pub trait CryptoHash<const N: usize> {
+    fn hash(data: impl AsRef<[u8]>) -> HashValue<N>;
+}
