@@ -1,0 +1,22 @@
+[package]
+name = "jellyfish-merkle-generic"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+hex = "0.4.3"
+proptest = { version = "1.0.0", optional = true }
+proptest-derive = { version = "0.3.0", optional = true }
+serde = { version = "1.0.137", features = ["derive"] }
+
+[dev-dependencies]
+proptest = "1.0.0"
+proptest-derive = "0.3.0"
+rand = { version = "0.8", features = ["min_const_gen"] }
+tiny-keccak = { version = "2.0.2", features = ["keccak", "sha3"] }
+
+[features]
+default = []
+fuzzing = ["dep:proptest", "dep:proptest-derive"]
