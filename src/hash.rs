@@ -3,9 +3,12 @@
 // Modified to make HashValue generic over output size
 use core::{fmt, str::FromStr};
 #[cfg(any(test, feature = "fuzzing"))]
-use proptest::prelude::{any, Arbitrary};
-#[cfg(any(test, feature = "fuzzing"))]
 use proptest::strategy::{BoxedStrategy, Strategy};
+#[cfg(any(test, feature = "fuzzing"))]
+use proptest::{
+    collection::vec,
+    prelude::{any, Arbitrary},
+};
 #[cfg(any(test, feature = "fuzzing"))]
 use rand::Rng;
 use serde::{de, ser};
@@ -19,14 +22,21 @@ pub struct HashValue<const N: usize> {
 }
 
 #[cfg(any(test, feature = "fuzzing"))]
-impl<const N: usize> Arbitrary for HashValue<N>
-where
-    [u8; N]: Arbitrary + Default,
-{
+impl<const N: usize> Arbitrary for HashValue<N> {
     type Parameters = ();
 
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        any::<[u8; N]>().prop_map(|x| HashValue { hash: x }).boxed()
+    // TODO: revert to more efficient impl below once proptest supports const generics
+    // fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+    //     any::<[u8; N]>().prop_map(|x| HashValue { hash: x }).boxed()
+    // }
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        vec(any::<u8>(), N)
+            .prop_map(|bytes| {
+                let mut out = [0u8; N];
+                out.copy_from_slice(bytes.as_ref());
+                HashValue::new(out)
+            })
+            .boxed()
     }
 
     type Strategy = BoxedStrategy<Self>;
@@ -37,6 +47,9 @@ impl<const N: usize> HashValue<N> {
     pub const LENGTH: usize = N;
     /// The length of the hash in bits.
     pub const LENGTH_IN_BITS: usize = Self::LENGTH * 8;
+    /// The longest path allowed in a merkle tree with this hash size.
+    /// Equal to the length of the hash in nibbles.
+    pub const ROOT_NIBBLE_HEIGHT: usize = Self::LENGTH * 2;
 
     /// Create a new [`HashValue`] from a byte array.
     pub fn new(hash: [u8; N]) -> Self {
@@ -395,6 +408,20 @@ impl<'a, const N: usize> std::iter::DoubleEndedIterator for HashValueBitIterator
 
 impl<'a, const N: usize> std::iter::ExactSizeIterator for HashValueBitIterator<'a, N> {}
 
-pub trait CryptoHash<const N: usize> {
-    fn hash(data: impl AsRef<[u8]>) -> HashValue<N>;
+pub trait TreeHash<const N: usize>: std::fmt::Debug {
+    type Hasher: CryptoHasher<N>;
+    const SPARSE_MERKLE_PLACEHOLDER_HASH: HashValue<N>;
+    fn hash(data: impl AsRef<[u8]>) -> HashValue<N> {
+        Self::Hasher::new().update(data.as_ref()).finalize()
+    }
+
+    fn hasher() -> Self::Hasher {
+        Self::Hasher::new()
+    }
+}
+
+pub trait CryptoHasher<const N: usize> {
+    fn new() -> Self;
+    fn update(&mut self, data: &[u8]) -> &mut Self;
+    fn finalize(&mut self) -> HashValue<N>;
 }

@@ -72,12 +72,17 @@
 
 use std::marker::PhantomData;
 
-use hash::CryptoHash;
+use errors::CodecError;
+use hash::TreeHash;
+use node_type::{LeafNode, Node, NodeKey};
 use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 
+pub mod errors;
 pub mod hash;
+pub mod metrics;
 pub mod node_type;
+pub mod proof;
 pub mod types;
 
 pub type Version = u64;
@@ -92,27 +97,43 @@ pub struct MissingRootError {
     pub version: Version,
 }
 
-pub trait Key: Clone + Serialize + DeserializeOwned + Send + Sync + 'static {
+// TODO: consider removing AsRef<u8> and TryFrom in favor of a concrete
+// serde serialization scheme
+pub trait Key:
+    AsRef<[u8]>
+    + for<'a> TryFrom<&'a [u8], Error = Self::FromBytesErr>
+    + Clone
+    + Serialize
+    + DeserializeOwned
+    + Send
+    + Sync
+    + 'static
+{
+    type FromBytesErr: std::error::Error;
     fn key_size(&self) -> usize;
 }
 
 /// `TreeReader` defines the interface between
 /// [`JellyfishMerkleTree`](struct.JellyfishMerkleTree.html)
 /// and underlying storage holding nodes.
-pub trait TreeReader<K, const N: usize> {
-    // TODO
-    // /// Gets node given a node key. Returns error if the node does not exist.
-    // fn get_node(&self, node_key: &NodeKey) -> Result<Node<K>> {
-    //     self.get_node_option(node_key)?
-    //         .ok_or_else(|| format_err!("Missing node at {:?}.", node_key))
-    // }
+pub trait TreeReader<K, H, const N: usize> {
+    type Error: Into<CodecError> + From<String>;
+    // // TODO
+    /// Gets node given a node key. Returns error if the node does not exist.
+    fn get_node(&self, node_key: &NodeKey<N>) -> Result<Node<K, H, N>, Self::Error> {
+        self.get_node_option(node_key)?
+            .ok_or_else(|| Self::Error::from(format!("Missing node at {:?}.", node_key)))
+    }
 
-    // /// Gets node given a node key. Returns `None` if the node does not exist.
-    // fn get_node_option(&self, node_key: &NodeKey) -> Result<Option<Node<K>>>;
+    /// Gets node given a node key. Returns `None` if the node does not exist.
+    fn get_node_option(&self, node_key: &NodeKey<N>) -> Result<Option<Node<K, H, N>>, Self::Error>;
 
-    // /// Gets the rightmost leaf at a version. Note that this assumes we are in the process of
-    // /// restoring the tree and all nodes are at the same version.
-    // fn get_rightmost_leaf(&self, version: Version) -> Result<Option<(NodeKey, LeafNode<K>)>>;
+    /// Gets the rightmost leaf at a version. Note that this assumes we are in the process of
+    /// restoring the tree and all nodes are at the same version.
+    fn get_rightmost_leaf(
+        &self,
+        version: Version,
+    ) -> Result<Option<(NodeKey<N>, LeafNode<K, H, N>)>, Self::Error>;
 }
 
 // TODO
@@ -127,8 +148,8 @@ pub struct JellyfishMerkleTree<'a, R, K, H, const N: usize> {
 
 impl<'a, R, K, H, const N: usize> JellyfishMerkleTree<'a, R, K, H, N>
 where
-    R: 'a + TreeReader<K, N> + Sync,
+    R: 'a + TreeReader<K, H, N> + Sync,
     K: Key,
-    H: CryptoHash<N>,
+    H: TreeHash<N>,
 {
 }
