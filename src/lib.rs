@@ -75,10 +75,12 @@ use std::{
     marker::PhantomData,
 };
 
+use errors::CodecError;
 use hash::{HashValue, TreeHash};
 use metrics::{inc_deletion_count_if_enabled, set_leaf_count_if_enabled};
 use node_type::{Child, Children, InternalNode, LeafNode, Node, NodeKey};
 use parallel::{parallel_process_range_if_enabled, run_on_io_pool_if_enabled};
+use proof::{SparseMerkleProof, SparseMerkleProofExt, SparseMerkleRangeProof};
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest_derive::Arbitrary;
 use serde::{de::DeserializeOwned, Serialize};
@@ -87,12 +89,16 @@ use types::nibble::{nibble_path::NibblePath, Nibble};
 
 pub mod errors;
 pub mod hash;
+#[cfg(any(test))]
+pub mod jellyfish_merkle_test;
 pub mod metrics;
 #[cfg(any(test, feature = "fuzzing"))]
 pub mod mock_tree_store;
 pub mod node_type;
 pub mod parallel;
 pub mod proof;
+#[cfg(any(test, feature = "fuzzing"))]
+pub mod test_helper;
 pub mod types;
 
 pub type Version = u64;
@@ -100,12 +106,6 @@ pub type Version = u64;
 #[cfg(any(test, feature = "fuzzing"))]
 /// The size of HashValues for testing
 pub const TEST_DIGEST_SIZE: usize = 32;
-
-#[derive(Error, Debug)]
-#[error("Missing state root node at version {version}, probably pruned.")]
-pub struct MissingRootError {
-    pub version: Version,
-}
 
 // TODO: consider removing AsRef<u8> and TryFrom in favor of a concrete
 // serde serialization scheme
@@ -120,7 +120,7 @@ pub trait Key:
     + PartialEq
     + 'static
 {
-    type FromBytesErr: std::error::Error;
+    type FromBytesErr: std::error::Error + Sized;
     fn key_size(&self) -> usize;
 }
 
@@ -208,7 +208,7 @@ where
         self.num_stale_leaves += num_stale_leaves;
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "fuzzing"))]
     pub fn num_stale_node(&self) -> usize {
         self.stale_node_index_batch.iter().map(Vec::len).sum()
     }
@@ -295,6 +295,16 @@ pub enum JmtError<E> {
     InvalidNull,
     #[error(transparent)]
     ReaderError(#[from] E),
+    #[error("ran out of nibbles searching for key {0:?}")]
+    PathTooShort(Vec<u8>),
+    #[error("The JMT contains a cycle!")]
+    ContainsCycle,
+    #[error("Missing key")]
+    MissingKey,
+    #[error("Cannot find root for version {version:}. Probably pruned")]
+    MissingRoot { version: u64 },
+    #[error(transparent)]
+    CodecError(CodecError),
 }
 
 /// The Jellyfish Merkle tree data structure. See [`crate`] for description.
@@ -718,6 +728,211 @@ where
             }
         }
     }
+
+    ///
+    /// [`put_value_sets`](struct.JellyfishMerkleTree.html#method.put_value_set) without the node hash
+    /// cache and assuming the base version is the immediate previous version.
+    #[cfg(any(test, feature = "fuzzing"))]
+    pub fn put_value_set_test(
+        &self,
+        value_set: Vec<(HashValue<N>, Option<&(HashValue<N>, K)>)>,
+        version: Version,
+    ) -> Result<(HashValue<N>, TreeUpdateBatch<K, H, N>), JmtError<R::Error>> {
+        self.batch_put_value_set(
+            value_set.into_iter().map(|(k, v)| (k, v)).collect(),
+            None,
+            version.checked_sub(1),
+            version,
+        )
+    }
+
+    /// Returns the value (if applicable) and the corresponding merkle proof.
+    pub fn get_with_proof(
+        &self,
+        key: HashValue<N>,
+        version: Version,
+    ) -> Result<
+        (
+            Option<(HashValue<N>, (K, Version))>,
+            SparseMerkleProof<H, N>,
+        ),
+        JmtError<R::Error>,
+    > {
+        self.get_with_proof_ext(key, version)
+            .map(|(value, proof_ext)| (value, proof_ext.into()))
+    }
+
+    pub fn get_with_proof_ext(
+        &self,
+        key: HashValue<N>,
+        version: Version,
+    ) -> Result<
+        (
+            Option<(HashValue<N>, (K, Version))>,
+            SparseMerkleProofExt<H, N>,
+        ),
+        JmtError<R::Error>,
+    > {
+        // Empty tree just returns proof with no sibling hash.
+        let mut next_node_key = NodeKey::new_empty_path(version);
+        let mut siblings = vec![];
+        let nibble_path = NibblePath::<N>::new_even(key.to_vec());
+        let mut nibble_iter = nibble_path.nibbles();
+
+        // We limit the number of loops here deliberately to avoid potential cyclic graph bugs
+        // in the tree structure.
+        for nibble_depth in 0..=NibblePath::<N>::ROOT_NIBBLE_HEIGHT {
+            let next_node = self.reader.get_node(&next_node_key).map_err(|err| {
+                if nibble_depth == 0 {
+                    JmtError::MissingRoot { version }
+                } else {
+                    err.into()
+                }
+            })?;
+            match next_node {
+                Node::Internal(internal_node) => {
+                    let queried_child_index = nibble_iter
+                        .next()
+                        .ok_or_else(|| JmtError::PathTooShort(key.to_vec()))?;
+                    let (child_node_key, mut siblings_in_internal) = internal_node
+                        .get_child_with_siblings(
+                            &next_node_key,
+                            queried_child_index,
+                            Some(self.reader),
+                        )
+                        .map_err(|e| JmtError::CodecError(e))?;
+                    siblings.append(&mut siblings_in_internal);
+                    next_node_key = match child_node_key {
+                        Some(node_key) => node_key,
+                        None => {
+                            return Ok((
+                                None,
+                                SparseMerkleProofExt::new(None, {
+                                    siblings.reverse();
+                                    siblings
+                                }),
+                            ))
+                        }
+                    };
+                }
+                Node::Leaf(leaf_node) => {
+                    return Ok((
+                        if leaf_node.account_key() == key {
+                            Some((leaf_node.value_hash(), leaf_node.value_index().clone()))
+                        } else {
+                            None
+                        },
+                        SparseMerkleProofExt::new(Some(leaf_node.into()), {
+                            siblings.reverse();
+                            siblings
+                        }),
+                    ));
+                }
+                Node::Null => {
+                    return Ok((None, SparseMerkleProofExt::new(None, vec![])));
+                }
+            }
+        }
+        return Err(JmtError::ContainsCycle);
+    }
+
+    /// Gets the proof that shows a list of keys up to `rightmost_key_to_prove` exist at `version`.
+    pub fn get_range_proof(
+        &self,
+        rightmost_key_to_prove: HashValue<N>,
+        version: Version,
+    ) -> Result<SparseMerkleRangeProof<H, N>, JmtError<R::Error>> {
+        let (account, proof) = self.get_with_proof(rightmost_key_to_prove, version)?;
+        if account.is_none() {
+            return Err(JmtError::MissingKey);
+        }
+
+        let siblings = proof
+            .siblings()
+            .iter()
+            .rev()
+            .zip(rightmost_key_to_prove.iter_bits())
+            .filter_map(|(sibling, bit)| {
+                // We only need to keep the siblings on the right.
+                if !bit {
+                    Some(*sibling)
+                } else {
+                    None
+                }
+            })
+            .rev()
+            .collect();
+        Ok(SparseMerkleRangeProof::new(siblings))
+    }
+
+    #[cfg(any(test, feature = "fuzzing"))]
+    pub fn get(
+        &self,
+        key: HashValue<N>,
+        version: Version,
+    ) -> Result<Option<HashValue<N>>, JmtError<R::Error>> {
+        Ok(self.get_with_proof(key, version)?.0.map(|x| x.0))
+    }
+
+    fn get_root_node(&self, version: Version) -> Result<Node<K, H, N>, JmtError<R::Error>> {
+        self.get_root_node_option(version)?
+            .ok_or_else(|| JmtError::MissingRoot { version })
+    }
+
+    fn get_root_node_option(
+        &self,
+        version: Version,
+    ) -> Result<Option<Node<K, H, N>>, JmtError<R::Error>> {
+        let root_node_key = NodeKey::new_empty_path(version);
+        self.reader
+            .get_node_option(&root_node_key)
+            .map_err(|e| e.into())
+    }
+
+    pub fn get_root_hash(&self, version: Version) -> Result<HashValue<N>, JmtError<R::Error>> {
+        self.get_root_node(version).map(|n| n.hash())
+    }
+
+    pub fn get_root_hash_option(
+        &self,
+        version: Version,
+    ) -> Result<Option<HashValue<N>>, JmtError<R::Error>> {
+        Ok(self.get_root_node_option(version)?.map(|n| n.hash()))
+    }
+
+    pub fn get_leaf_count(&self, version: Version) -> Result<usize, JmtError<R::Error>> {
+        self.get_root_node(version).map(|n| n.leaf_count())
+    }
+
+    pub fn get_all_nodes_referenced(
+        &self,
+        version: Version,
+    ) -> Result<Vec<NodeKey<N>>, JmtError<R::Error>> {
+        let mut out_keys = vec![];
+        self.get_all_nodes_referenced_impl(NodeKey::new_empty_path(version), &mut out_keys)?;
+        Ok(out_keys)
+    }
+
+    fn get_all_nodes_referenced_impl(
+        &self,
+        key: NodeKey<N>,
+        out_keys: &mut Vec<NodeKey<N>>,
+    ) -> Result<(), JmtError<R::Error>> {
+        match self.reader.get_node(&key)? {
+            Node::Internal(internal_node) => {
+                for (child_nibble, child) in internal_node.children_sorted() {
+                    self.get_all_nodes_referenced_impl(
+                        key.gen_child_node_key(child.version, *child_nibble),
+                        out_keys,
+                    )?;
+                }
+            }
+            Node::Leaf(_) | Node::Null => {}
+        };
+
+        out_keys.push(key);
+        Ok(())
+    }
 }
 
 trait NibbleExt<const N: usize> {
@@ -744,8 +959,12 @@ impl<const N: usize> NibbleExt<N> for HashValue<N> {
 pub mod test_utils {
     use proptest::prelude::Arbitrary;
     use std::hash::Hash;
+    use tiny_keccak::{Hasher, Sha3};
 
-    use crate::Key;
+    use crate::{
+        hash::{CryptoHasher, HashValue, TreeHash},
+        Key,
+    };
 
     /// `TestKey` defines the types of data that can be stored in a Jellyfish Merkle tree and used in
     /// tests.
@@ -753,6 +972,36 @@ pub mod test_utils {
     pub trait TestKey:
         Key + Arbitrary + std::fmt::Debug + Eq + Hash + Ord + PartialOrd + PartialEq + 'static
     {
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct TestHash;
+
+    impl TreeHash<32> for TestHash {
+        type Hasher = TestHasher;
+
+        const SPARSE_MERKLE_PLACEHOLDER_HASH: crate::hash::HashValue<32> =
+            HashValue::new(*b"SPARSE_MERKLE_PLACEHOLDER_HASH\0\0");
+    }
+
+    #[derive(Clone)]
+    pub struct TestHasher(pub Sha3);
+
+    impl CryptoHasher<32> for TestHasher {
+        fn new() -> Self {
+            Self(Sha3::v256())
+        }
+
+        fn update(mut self, data: &[u8]) -> Self {
+            self.0.update(data);
+            self
+        }
+
+        fn finalize(self) -> crate::hash::HashValue<32> {
+            let mut out = [0u8; 32];
+            self.0.finalize(&mut out);
+            HashValue::new(out)
+        }
     }
 }
 
@@ -776,9 +1025,7 @@ mod test {
     /// `serde::Serialize`.
     ///
     /// # Example
-    /// ```
-    /// use aptos_crypto::hash::TestOnlyHash;
-    ///
+    /// ```ignore
     /// b"hello world".test_only_hash();
     /// ```
     pub trait TestOnlyHash {

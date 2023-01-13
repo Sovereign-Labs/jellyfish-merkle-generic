@@ -9,10 +9,10 @@ use proptest::{
     collection::vec,
     prelude::{any, Arbitrary},
 };
-#[cfg(any(test))]
+#[cfg(any(test, feature = "fuzzing"))]
 use rand::Rng;
 use serde::{de, ser};
-#[cfg(test)]
+#[cfg(any(test, feature = "fuzzing"))]
 use tiny_keccak::{Hasher, Sha3};
 
 /// Output value of a function. Intentionally opaque for safety and modularity.
@@ -52,7 +52,7 @@ impl<const N: usize> HashValue<N> {
     pub const ROOT_NIBBLE_HEIGHT: usize = Self::LENGTH * 2;
 
     /// Create a new [`HashValue`] from a byte array.
-    pub fn new(hash: [u8; N]) -> Self {
+    pub const fn new(hash: [u8; N]) -> Self {
         HashValue { hash }
     }
 
@@ -74,7 +74,7 @@ impl<const N: usize> HashValue<N> {
     }
 
     /// Create a cryptographically random instance.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "fuzzing"))]
     pub fn random() -> Self {
         use rand::rngs::OsRng;
 
@@ -84,8 +84,8 @@ impl<const N: usize> HashValue<N> {
     }
 
     /// Creates a random instance with given rng. Useful in unit tests.
-    #[cfg(test)]
-    pub fn random_with_rng<R: Rng>(rng: &mut R) -> Self {
+    #[cfg(any(test, feature = "fuzzing"))]
+    pub fn random_with_rng<R: rand::Rng>(rng: &mut R) -> Self {
         let hash: [u8; N] = rng.gen();
         HashValue { hash }
     }
@@ -96,14 +96,14 @@ impl<const N: usize> HashValue<N> {
     ///
     /// Note this will not result in the `<T as CryptoHash>::hash()` for any
     /// reasonable struct T, as this computes a sha3 without any ornaments.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "fuzzing"))]
     pub fn sha3_256_of(buffer: &[u8]) -> Self {
         let mut sha3 = Sha3::v256();
         sha3.update(buffer);
         HashValue::from_keccak(sha3)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "fuzzing"))]
     pub fn from_iter_sha3<'a, I>(buffers: I) -> Self
     where
         I: IntoIterator<Item = &'a [u8]>,
@@ -115,12 +115,12 @@ impl<const N: usize> HashValue<N> {
         HashValue::from_keccak(sha3)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "fuzzing"))]
     fn as_ref_mut(&mut self) -> &mut [u8] {
         &mut self.hash[..]
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "fuzzing"))]
     fn from_keccak(state: Sha3) -> Self {
         let mut hash = Self::zero();
         state.finalize(hash.as_ref_mut());
@@ -422,6 +422,6 @@ pub trait TreeHash<const N: usize>: std::fmt::Debug + Send + Sync + std::cmp::Pa
 
 pub trait CryptoHasher<const N: usize> {
     fn new() -> Self;
-    fn update(&mut self, data: &[u8]) -> &mut Self;
-    fn finalize(&mut self) -> HashValue<N>;
+    fn update(self, data: &[u8]) -> Self;
+    fn finalize(self) -> HashValue<N>;
 }

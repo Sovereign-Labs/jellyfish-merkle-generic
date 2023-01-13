@@ -201,7 +201,7 @@ impl<H: TreeHash<N>, const N: usize> SparseMerkleProof<H, N> {
                         leaf_key: element_key,
                     });
                 }
-                if !element_key.common_prefix_bits_len(leaf.key) >= self.siblings.len() {
+                if element_key.common_prefix_bits_len(leaf.key) < self.siblings.len() {
                     return Err(ProofError::InvalidNonInclusionProof {
                         key_in_proof: leaf.key,
                         key_to_verify: element_key,

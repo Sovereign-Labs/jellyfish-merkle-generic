@@ -304,7 +304,7 @@ impl<H: TreeHash<N>, const N: usize> InternalNode<H, N> {
             return Err(InternalNodeConstructionError::NoChildrenProvided);
         }
         if children.len() == 1 {
-            if !children
+            if children
                 .values()
                 .next()
                 .expect("Must have 1 element")
@@ -524,7 +524,7 @@ impl<H: TreeHash<N>, const N: usize> InternalNode<H, N> {
                 match tree_reader.get_node(&only_child_node_key).map_err(|e| {
                     CodecError::NodeFetchError {
                         key: format!("{:?}", &only_child_node_key),
-                        err: e.into(),
+                        err: e.to_string(),
                     }
                 })? {
                     Node::Internal(_) => unreachable!(
@@ -740,7 +740,10 @@ where
         let mut cursor = std::io::Cursor::new(&data[2 * N..]);
         let key_len = cursor.read_u32::<LittleEndian>()?;
         let key_slice = &data[(cursor.position() as usize)..][..key_len as usize];
-        let key = K::try_from(key_slice).map_err(|e| CodecError::KeyDecodeError(e.into()))?;
+        let key = K::try_from(key_slice).map_err(|e| CodecError::KeyDecodeError {
+            key_type: std::any::type_name::<K>(),
+            err: e.to_string(),
+        })?;
         cursor.set_position(cursor.position() + key_len as u64);
         let version = cursor.read_u64::<LittleEndian>()?;
 

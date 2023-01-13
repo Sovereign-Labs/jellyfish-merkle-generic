@@ -5,10 +5,10 @@
 //! Merkle tree by providing powerful iterators advancing by either bit or nibble.
 
 // TODO: add back test
-// #[cfg(test)]
+// #[cfg(any(test, feature = "fuzzing"))]
 // mod nibble_path_test;
 
-#[cfg(any(test, feature = "fuzzing"))]
+#[cfg(any(test))]
 mod nibble_path_test;
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest::{collection::vec, prelude::*};
@@ -103,7 +103,7 @@ impl<const N: usize> Arbitrary for NibblePath<N> {
 // }
 
 impl<const N: usize> NibblePath<N> {
-    const ROOT_NIBBLE_HEIGHT: usize = N * 2;
+    pub const ROOT_NIBBLE_HEIGHT: usize = N * 2;
     /// Creates a new `NibblePath` from a vector of bytes assuming each byte has 2 nibbles.
     pub fn new_even(bytes: Vec<u8>) -> Self {
         assert!(bytes.len() <= Self::ROOT_NIBBLE_HEIGHT / 2);
@@ -128,7 +128,7 @@ impl<const N: usize> NibblePath<N> {
     //     NibblePath::new_from_byte_array(state_key.hash().as_ref(), num_nibbles)
     // }
 
-    #[cfg(any(test, feature = "fuzzing"))]
+    #[cfg(test)]
     fn new_from_byte_array(bytes: &[u8], num_nibbles: usize) -> Self {
         assert!(num_nibbles <= Self::ROOT_NIBBLE_HEIGHT);
         if num_nibbles % 2 == 1 {
