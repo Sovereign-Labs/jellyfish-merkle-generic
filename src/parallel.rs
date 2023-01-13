@@ -2,7 +2,7 @@ use crate::{
     hash::{HashValue, TreeHash},
     node_type::Node,
     types::nibble::Nibble,
-    Key, NibbleRangeIterator, TreeReader, TreeUpdateBatch,
+    JmtError, Key, NibbleRangeIterator, TreeReader, TreeUpdateBatch,
 };
 
 #[cfg(any(test, feature = "rayon"))]
@@ -18,7 +18,7 @@ pub fn parallel_process_range_if_enabled<
     range_iter: NibbleRangeIterator<Option<&(HashValue<N>, K)>, N>,
     batch: &'a mut TreeUpdateBatch<K, H, N>,
     mapper: F,
-) -> Result<Vec<(Nibble, Option<Node<K, H, N>>)>, R::Error>
+) -> Result<Vec<(Nibble, Option<Node<K, H, N>>)>, JmtError<R::Error>>
 where
     R: 'a,
     H: 'a,
@@ -29,7 +29,7 @@ where
             usize,
             usize,
             &'b mut TreeUpdateBatch<K, H, N>,
-        ) -> Result<(Nibble, Option<Node<K, H, N>>), R::Error>
+        ) -> Result<(Nibble, Option<Node<K, H, N>>), JmtError<R::Error>>
         + Send
         + Sync,
 {
@@ -44,7 +44,7 @@ where
                 let mut sub_batch = TreeUpdateBatch::<K, H, N>::new();
                 Ok((mapper(*left, *right, &mut sub_batch)?, sub_batch))
             })
-            .collect::<Result<Vec<_>, R::Error>>()?
+            .collect::<Result<Vec<_>, JmtError<R::Error>>>()?
             .into_iter()
             .map(|(ret, sub_batch)| {
                 batch.combine(sub_batch);
@@ -54,7 +54,7 @@ where
     } else {
         range_iter
             .map(|(left, right)| mapper(left, right, batch))
-            .collect::<Result<_, R::Error>>()
+            .collect::<Result<_, JmtError<R::Error>>>()
     }
 }
 
@@ -71,7 +71,7 @@ pub fn parallel_process_range_if_enabled<
     range_iter: NibbleRangeIterator<Option<&(HashValue<N>, K)>, N>,
     batch: &'a mut TreeUpdateBatch<K, H, N>,
     mapper: F,
-) -> Result<Vec<(Nibble, Option<Node<K, H, N>>)>, R::Error>
+) -> Result<Vec<(Nibble, Option<Node<K, H, N>>)>, JmtError<R::Error>>
 where
     R: 'a,
     H: 'a,
@@ -81,13 +81,13 @@ where
             usize,
             usize,
             &'b mut TreeUpdateBatch<K, H, N>,
-        ) -> Result<(Nibble, Option<Node<K, H, N>>), R::Error>
+        ) -> Result<(Nibble, Option<Node<K, H, N>>), JmtError<R::Error>>
         + Send
         + Sync,
 {
     range_iter
         .map(|(left, right)| mapper(left, right, batch))
-        .collect::<Result<_, R::Error>>()
+        .collect::<Result<_, JmtError<R::Error>>>()
 }
 
 #[cfg(any(test, feature = "rayon"))]

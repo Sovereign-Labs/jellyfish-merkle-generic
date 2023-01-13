@@ -75,7 +75,6 @@ use std::{
     marker::PhantomData,
 };
 
-use errors::CodecError;
 use hash::{HashValue, TreeHash};
 use metrics::{inc_deletion_count_if_enabled, set_leaf_count_if_enabled};
 use node_type::{Child, Children, InternalNode, LeafNode, Node, NodeKey};
@@ -89,6 +88,8 @@ use types::nibble::{nibble_path::NibblePath, Nibble};
 pub mod errors;
 pub mod hash;
 pub mod metrics;
+#[cfg(any(test, feature = "fuzzing"))]
+pub mod mock_tree_store;
 pub mod node_type;
 pub mod parallel;
 pub mod proof;
@@ -116,6 +117,7 @@ pub trait Key:
     + DeserializeOwned
     + Send
     + Sync
+    + PartialEq
     + 'static
 {
     type FromBytesErr: std::error::Error;
@@ -126,7 +128,7 @@ pub trait Key:
 /// [`JellyfishMerkleTree`](struct.JellyfishMerkleTree.html)
 /// and underlying storage holding nodes.
 pub trait TreeReader<K, H, const N: usize> {
-    type Error: Into<CodecError> + Send + Sync + TreeError;
+    type Error: std::error::Error + Send + Sync + 'static;
     // // TODO
     /// Gets node given a node key. Returns error if the node does not exist.
     ///
@@ -147,12 +149,13 @@ pub trait TreeReader<K, H, const N: usize> {
     ) -> Result<Option<(NodeKey<N>, LeafNode<K, H, N>)>, Self::Error>;
 }
 
-pub trait TreeError {
-    fn invalid_null() -> Self;
-}
+/// Node batch that will be written into db atomically with other batches.
+pub type NodeBatch<K, H, const N: usize> = HashMap<NodeKey<N>, Node<K, H, N>>;
 
-// TODO
-pub trait TreeWriter<K, const N: usize>: Send + Sync {}
+pub trait TreeWriter<K, H, const N: usize>: Send + Sync {
+    type Error: std::error::Error + Send + Sync;
+    fn write_node_batch(&self, node_batch: &NodeBatch<K, H, N>) -> Result<(), Self::Error>;
+}
 
 /// Indicates a node becomes stale since `stale_since_version`.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -286,6 +289,14 @@ impl<'a, K, const N: usize> std::iter::Iterator for NibbleRangeIterator<'a, K, N
     }
 }
 
+#[derive(Debug, Error)]
+pub enum JmtError<E> {
+    #[error("Invalid null")]
+    InvalidNull,
+    #[error(transparent)]
+    ReaderError(#[from] E),
+}
+
 /// The Jellyfish Merkle tree data structure. See [`crate`] for description.
 pub struct JellyfishMerkleTree<'a, R, K, H, const N: usize> {
     reader: &'a R,
@@ -372,7 +383,7 @@ where
         node_hashes: Option<&HashMap<NibblePath<N>, HashValue<N>>>,
         persisted_version: Option<Version>,
         version: Version,
-    ) -> Result<(HashValue<N>, TreeUpdateBatch<K, H, N>), R::Error> {
+    ) -> Result<(HashValue<N>, TreeUpdateBatch<K, H, N>), JmtError<R::Error>> {
         let deduped_and_sorted_kvs = value_set
             .into_iter()
             .collect::<BTreeMap<_, _>>()
@@ -425,7 +436,7 @@ where
         depth: usize,
         hash_cache: &Option<&HashMap<NibblePath<N>, HashValue<N>>>,
         batch: &mut TreeUpdateBatch<K, H, N>,
-    ) -> Result<Option<Node<K, H, N>>, R::Error> {
+    ) -> Result<Option<Node<K, H, N>>, JmtError<R::Error>> {
         let node = self.reader.get_node(node_key)?;
         batch.put_stale_node(node_key.clone(), version, &node);
 
@@ -509,7 +520,7 @@ where
             ),
             Node::Null => {
                 if depth == 0 {
-                    return Err(R::Error::invalid_null());
+                    return Err(JmtError::InvalidNull);
                 }
                 self.batch_update_subtree(node_key, version, kvs, 0, hash_cache, batch)
             }
@@ -527,7 +538,7 @@ where
         depth: usize,
         hash_cache: &Option<&HashMap<NibblePath<N>, HashValue<N>>>,
         batch: &mut TreeUpdateBatch<K, H, N>,
-    ) -> Result<(Nibble, Option<Node<K, H, N>>), R::Error> {
+    ) -> Result<(Nibble, Option<Node<K, H, N>>), JmtError<R::Error>> {
         let child_index = kvs[left].0.get_nibble(depth);
         let child = internal_node.child(child_index);
 
@@ -562,7 +573,7 @@ where
         depth: usize,
         hash_cache: &Option<&HashMap<NibblePath<N>, HashValue<N>>>,
         batch: &mut TreeUpdateBatch<K, H, N>,
-    ) -> Result<Option<Node<K, H, N>>, R::Error> {
+    ) -> Result<Option<Node<K, H, N>>, JmtError<R::Error>> {
         let existing_leaf_key = existing_leaf_node.account_key();
 
         if kvs.len() == 1 && kvs[0].0 == existing_leaf_key {
@@ -650,7 +661,7 @@ where
         depth: usize,
         hash_cache: &Option<&HashMap<NibblePath<N>, HashValue<N>>>,
         batch: &mut TreeUpdateBatch<K, H, N>,
-    ) -> Result<Option<Node<K, H, N>>, R::Error> {
+    ) -> Result<Option<Node<K, H, N>>, JmtError<R::Error>> {
         if kvs.len() == 1 {
             if let (key, Some((value_hash, state_key))) = kvs[0] {
                 let new_leaf_node = Node::new_leaf(key, *value_hash, (state_key.clone(), version));
@@ -729,6 +740,21 @@ impl<const N: usize> NibbleExt<N> for HashValue<N> {
         self.common_prefix_bits_len(other) / 4
     }
 }
+#[cfg(any(test, feature = "fuzzing"))]
+pub mod test_utils {
+    use proptest::prelude::Arbitrary;
+    use std::hash::Hash;
+
+    use crate::Key;
+
+    /// `TestKey` defines the types of data that can be stored in a Jellyfish Merkle tree and used in
+    /// tests.
+
+    pub trait TestKey:
+        Key + Arbitrary + std::fmt::Debug + Eq + Hash + Ord + PartialOrd + PartialEq + 'static
+    {
+    }
+}
 
 #[cfg(test)]
 mod test {
@@ -736,18 +762,10 @@ mod test {
     use serde::ser;
 
     use crate::{hash::HashValue, types::nibble::Nibble, Key};
-    use std::hash::Hash;
 
     use super::NibbleExt;
     type TestHashValue = HashValue<TEST_HASH_LENGTH>;
     const TEST_HASH_LENGTH: usize = 32;
-    /// `TestKey` defines the types of data that can be stored in a Jellyfish Merkle tree and used in
-    /// tests.
-    #[cfg(any(test, feature = "fuzzing"))]
-    pub trait TestKey:
-        Key + Arbitrary + std::fmt::Debug + Eq + Hash + Ord + PartialOrd + PartialEq + 'static
-    {
-    }
 
     /// `TestValue` defines the types of data that can be stored in a Jellyfish Merkle tree and used in
     /// tests.

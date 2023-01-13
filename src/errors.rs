@@ -27,6 +27,12 @@ pub enum CodecError {
     InternalNodeConstructionError(#[from] InternalNodeConstructionError),
     #[error(transparent)]
     KeyDecodeError(#[from] Box<dyn std::error::Error>),
+    #[error("Unable to fetch node with key {key:}: err {err:} ")]
+    NodeFetchError {
+        // TODO: consider making this a generic to avoid conversion to string
+        key: String,
+        err: Box<dyn std::error::Error + 'static>,
+    },
 }
 
 #[derive(Debug, Error)]

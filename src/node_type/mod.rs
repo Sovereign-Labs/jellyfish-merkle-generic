@@ -521,10 +521,12 @@ impl<H: TreeHash<N>, const N: usize> InternalNode<H, N> {
             if matches!(only_child.node_type, NodeType::Leaf) {
                 let only_child_node_key =
                     node_key.gen_child_node_key(only_child.version, only_child_index);
-                match tree_reader
-                    .get_node(&only_child_node_key)
-                    .map_err(|e| e.into())?
-                {
+                match tree_reader.get_node(&only_child_node_key).map_err(|e| {
+                    CodecError::NodeFetchError {
+                        key: format!("{:?}", &only_child_node_key),
+                        err: e.into(),
+                    }
+                })? {
                     Node::Internal(_) => unreachable!(
                         "Corrupted internal node: in-memory leaf child is internal node on disk"
                     ),

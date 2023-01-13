@@ -408,7 +408,7 @@ impl<'a, const N: usize> std::iter::DoubleEndedIterator for HashValueBitIterator
 
 impl<'a, const N: usize> std::iter::ExactSizeIterator for HashValueBitIterator<'a, N> {}
 
-pub trait TreeHash<const N: usize>: std::fmt::Debug + Send + Sync {
+pub trait TreeHash<const N: usize>: std::fmt::Debug + Send + Sync + std::cmp::PartialEq {
     type Hasher: CryptoHasher<N>;
     const SPARSE_MERKLE_PLACEHOLDER_HASH: HashValue<N>;
     fn hash(data: impl AsRef<[u8]>) -> HashValue<N> {
