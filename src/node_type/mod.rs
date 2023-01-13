@@ -14,7 +14,7 @@ use crate::{
     metrics::inc_internal_encoded_bytes_if_enabled,
     proof::{NodeInProof, SparseMerkleLeafNode},
     types::nibble::{nibble_path::NibblePath, Nibble},
-    TreeReader, Version,
+    Key, TreeReader, Version,
 };
 
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -205,13 +205,23 @@ pub(crate) type Children<const N: usize> = HashMap<Nibble, Child<N>>;
 /// Though we choose the same internal node structure as that of Patricia Merkle tree, the root hash
 /// computation logic is similar to a 4-level sparse Merkle tree except for some customizations. See
 /// the `CryptoHash` trait implementation below for details.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct InternalNode<H, const N: usize> {
     /// Up to 16 children.
     children: Children<N>,
     /// Total number of leaves under this internal node
     leaf_count: usize,
     phantom_hasher: std::marker::PhantomData<H>,
+}
+
+impl<H, const N: usize> Clone for InternalNode<H, N> {
+    fn clone(&self) -> Self {
+        Self {
+            children: self.children.clone(),
+            leaf_count: self.leaf_count.clone(),
+            phantom_hasher: self.phantom_hasher.clone(),
+        }
+    }
 }
 
 /// Computes the hash of internal node according to [`JellyfishTree`](crate::JellyfishTree)
@@ -640,7 +650,7 @@ pub(crate) fn get_child_and_sibling_half_start(n: Nibble, height: u8) -> (u8, u8
 }
 
 /// Represents an account.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LeafNode<K, H, const N: usize> {
     // The hashed key associated with this leaf node.
     account_key: HashValue<N>,
@@ -649,6 +659,17 @@ pub struct LeafNode<K, H, const N: usize> {
     // The key and version that points to the value
     value_index: (K, Version),
     phantom_hasher: std::marker::PhantomData<H>,
+}
+
+impl<K: Key, H, const N: usize> Clone for LeafNode<K, H, N> {
+    fn clone(&self) -> Self {
+        Self {
+            account_key: self.account_key.clone(),
+            value_hash: self.value_hash.clone(),
+            value_index: self.value_index.clone(),
+            phantom_hasher: self.phantom_hasher.clone(),
+        }
+    }
 }
 
 impl<K, H, const N: usize> LeafNode<K, H, N>
@@ -692,9 +713,9 @@ where
     pub fn serialize(&self, binary: &mut Vec<u8>) -> Result<(), CodecError> {
         binary.extend_from_slice(self.account_key.as_ref());
         binary.extend_from_slice(self.value_hash.as_ref());
-        binary.write_u32::<LittleEndian>(self.value_index.0.key_size() as u32);
+        binary.write_u32::<LittleEndian>(self.value_index.0.key_size() as u32)?;
         binary.extend_from_slice(self.value_index.0.as_ref());
-        binary.write_u64::<LittleEndian>(self.value_index.1);
+        binary.write_u64::<LittleEndian>(self.value_index.1)?;
         Ok(())
     }
 
@@ -767,7 +788,7 @@ impl NodeTag {
 }
 
 /// The concrete node type of [`JellyfishMerkleTree`](crate::JellyfishMerkleTree).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum Node<K, H, const N: usize> {
     /// A wrapper of [`InternalNode`].
     Internal(InternalNode<H, N>),
@@ -775,6 +796,16 @@ pub enum Node<K, H, const N: usize> {
     Leaf(LeafNode<K, H, N>),
     /// Represents empty tree only
     Null,
+}
+
+impl<K: Key, H, const N: usize> Clone for Node<K, H, N> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Internal(arg0) => Self::Internal(arg0.clone()),
+            Self::Leaf(arg0) => Self::Leaf(arg0.clone()),
+            Self::Null => Self::Null,
+        }
+    }
 }
 
 impl<K, H, const N: usize> From<InternalNode<H, N>> for Node<K, H, N> {
