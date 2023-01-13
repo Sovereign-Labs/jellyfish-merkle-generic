@@ -11,7 +11,7 @@ use crate::{
         InternalNodeConstructionError, NodeDecodeError,
     },
     hash::{CryptoHasher, HashValue, TreeHash},
-    metrics::inc_internal_encoded_bytes_if_enabled,
+    metrics::{inc_internal_encoded_bytes_if_enabled, inc_leaf_encoded_bytes_if_enabled},
     proof::{NodeInProof, SparseMerkleLeafNode},
     types::nibble::{nibble_path::NibblePath, Nibble},
     Key, TreeReader, Version,
@@ -892,7 +892,7 @@ where
             Node::Leaf(leaf_node) => {
                 out.push(NodeTag::Leaf as u8);
                 leaf_node.serialize(&mut out)?;
-                inc_internal_encoded_bytes_if_enabled(out.len())
+                inc_leaf_encoded_bytes_if_enabled(out.len())
             }
             Node::Null => {
                 out.push(NodeTag::Null as u8);
@@ -1021,7 +1021,6 @@ mod tests {
                 let clone = wrapped.clone();
                 prop_assert_eq!(wrapped, clone);
             }
-
 
             #[test]
             fn test_node_tag_roundtrip(tag: NodeTag) {
