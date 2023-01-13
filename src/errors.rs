@@ -26,11 +26,11 @@ pub enum CodecError {
     #[error(transparent)]
     InternalNodeConstructionError(#[from] InternalNodeConstructionError),
     #[error("Unable to decode key of type {key_type:}: err {err:} ")]
-    // TODO: consider making this a generic to avoid conversion to string
+    // TODO(preston-evans98): consider making this a generic to avoid conversion to string
     KeyDecodeError { key_type: &'static str, err: String },
     #[error("Unable to fetch node with key {key:}: err {err:} ")]
     NodeFetchError {
-        // TODO: consider making this a generic to avoid conversion to string
+        // TODO(preston-evans98): consider making this a generic to avoid conversion to string
         key: String,
         err: String,
     },

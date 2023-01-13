@@ -107,7 +107,7 @@ pub type Version = u64;
 /// The size of HashValues for testing
 pub const TEST_DIGEST_SIZE: usize = 32;
 
-// TODO: consider removing AsRef<u8> and TryFrom in favor of a concrete
+// TODO(preston-evans98): consider removing AsRef<u8> and TryFrom in favor of a concrete
 // serde serialization scheme
 pub trait Key:
     AsRef<[u8]>
@@ -129,7 +129,6 @@ pub trait Key:
 /// and underlying storage holding nodes.
 pub trait TreeReader<K, H, const N: usize> {
     type Error: std::error::Error + Send + Sync + 'static;
-    // // TODO
     /// Gets node given a node key. Returns error if the node does not exist.
     ///
     /// Recommended impl:

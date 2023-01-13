@@ -355,8 +355,8 @@ impl<H: TreeHash<N>, const N: usize> SparseMerkleRangeProof<H, N> {
     }
 }
 
-#[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
 #[derive(Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
 pub struct SparseMerkleLeafNode<H, const N: usize> {
     key: HashValue<N>,
     value_hash: HashValue<N>,
@@ -364,12 +364,12 @@ pub struct SparseMerkleLeafNode<H, const N: usize> {
 }
 // Implement clone manually since Derive is broken.
 // TODO: root cause. Maybe a compiler bug?
+// It may be related to https://github.com/rust-lang/rust/issues/26925
 //
 // Steps to reproduce:
 //  1. Delete this manual impl
 //  2. Add #[derive(Clone)] annotation to SparseMerkleLeafNode<H, const N: usize>
 //  3. Profit
-// TODO: Add a proptest to enforce correctness
 impl<H, const N: usize> Clone for SparseMerkleLeafNode<H, N> {
     fn clone(&self) -> Self {
         Self {
@@ -403,4 +403,20 @@ impl<H: TreeHash<N>, const N: usize> SparseMerkleLeafNode<H, N> {
             .update(self.value_hash.as_ref())
             .finalize()
     }
+}
+
+#[cfg(any(test, feature = "fuzzing"))]
+mod tests {
+    use proptest::proptest;
+
+    use crate::test_utils::TestHash;
+
+    use super::SparseMerkleLeafNode;
+
+    proptest! {
+    #[test]
+    fn test_clone_sparse_merkle_leaf_node(node: SparseMerkleLeafNode<TestHash, 32>) {
+        let clone = node.clone();
+        assert_eq!(clone, node);
+    }}
 }

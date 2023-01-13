@@ -25,7 +25,7 @@ pub struct HashValue<const N: usize> {
 impl<const N: usize> Arbitrary for HashValue<N> {
     type Parameters = ();
 
-    // TODO: revert to more efficient impl below once proptest supports const generics
+    // TODO(preston-evans98): revert to more efficient impl below once proptest supports const generics
     // fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
     //     any::<[u8; N]>().prop_map(|x| HashValue { hash: x }).boxed()
     // }
@@ -333,7 +333,7 @@ impl<const N: usize> fmt::Display for HashValue<N> {
     }
 }
 
-// TODO: consider adding back
+// TODO(preston-evans98): consider adding back
 // impl From<HashValue> for Bytes {
 //     fn from(value: HashValue) -> Bytes {
 //         Bytes::copy_from_slice(value.hash.as_ref())

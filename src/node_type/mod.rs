@@ -215,7 +215,6 @@ pub struct InternalNode<H, const N: usize> {
 }
 
 // Derive is broken. See comment on SparseMerkleLeafNode<H, const N: usize>
-// TODO: Add a proptest to enforce correctness.
 impl<H, const N: usize> Clone for InternalNode<H, N> {
     fn clone(&self) -> Self {
         Self {
@@ -666,7 +665,6 @@ pub struct LeafNode<K, H, const N: usize> {
 }
 
 // Derive is broken. See comment on SparseMerkleLeafNode<H, const N: usize>
-// TODO: Add a proptest to enforce correctness.
 impl<K: Key, H, const N: usize> Clone for LeafNode<K, H, N> {
     fn clone(&self) -> Self {
         Self {
@@ -780,7 +778,6 @@ enum NodeTag {
     Null = 3,
 }
 
-// TODO: add proptest to ensure that all variants are covered
 impl NodeTag {
     pub fn from_u8(tag: u8) -> Option<Self> {
         Some(match tag {
@@ -989,5 +986,47 @@ impl<H: TreeHash<N>, const N: usize> MerkleTreeInternalNode<H, N> {
             .update(self.left_child.as_ref())
             .update(self.right_child.as_ref())
             .finalize()
+    }
+}
+
+#[cfg(any(test, feature = "fuzzing"))]
+mod tests {
+    use proptest::{prop_assert_eq, proptest};
+
+    use crate::{
+        node_type::{InternalNode, LeafNode, Node, NodeTag},
+        test_helper::ValueBlob,
+        test_utils::TestHash,
+        HashValue,
+    };
+
+    proptest! {
+            #[test]
+            fn test_clone_internal_node(node: InternalNode<TestHash, 32>) {
+                let clone = node.clone();
+                prop_assert_eq!(&clone, &node);
+
+                let wrapped:Node<ValueBlob, TestHash, 32> = Node::Internal(node);
+                let clone = wrapped.clone();
+                prop_assert_eq!(wrapped, clone);
+            }
+
+            #[test]
+            fn test_clone_leaf_node(h1: HashValue<32>, h2: HashValue<32>, value: ValueBlob, version: u64) {
+                let node: LeafNode<ValueBlob, TestHash, 32>= LeafNode::new(h1, h2, (value, version));
+                let clone = node.clone();
+                prop_assert_eq!(&clone, &node);
+
+                let wrapped:Node<ValueBlob, TestHash, 32> = Node::Leaf(node);
+                let clone = wrapped.clone();
+                prop_assert_eq!(wrapped, clone);
+            }
+
+
+            #[test]
+            fn test_node_tag_roundtrip(tag: NodeTag) {
+                prop_assert_eq!(NodeTag::from_u8(tag.to_u8()), Some(tag));
+            }
+
     }
 }

@@ -4,10 +4,6 @@
 //! NibblePath library simplify operations with nibbles in a compact format for modified sparse
 //! Merkle tree by providing powerful iterators advancing by either bit or nibble.
 
-// TODO: add back test
-// #[cfg(any(test, feature = "fuzzing"))]
-// mod nibble_path_test;
-
 #[cfg(any(test))]
 mod nibble_path_test;
 #[cfg(any(test, feature = "fuzzing"))]
@@ -73,35 +69,6 @@ impl<const N: usize> Arbitrary for NibblePath<N> {
     }
 }
 
-// #[cfg(any(test, feature = "fuzzing"))]
-// prop_compose! {
-//     fn arb_nibble_path()(
-//         mut bytes in vec(any::<u8>(), 0..=TEST_DIGEST_SIZE),
-//         is_odd in any::<bool>()
-//     ) -> NibblePath<TEST_DIGEST_SIZE>{
-//         if let Some(last_byte) = bytes.last_mut() {
-//             if is_odd {
-//                 *last_byte &= 0xf0;
-//                 return NibblePath::new_odd(bytes);
-//             }
-//         }
-//         NibblePath::new_even(bytes)
-//     }
-// }
-
-// // TODO: Re-enable when test-time comes
-// #[cfg(any(test, feature = "fuzzing"))]
-// prop_compose! {
-//     fn arb_internal_nibble_path()(
-//         nibble_path in arb_nibble_path().prop_filter(
-//             "Filter out leaf paths.",
-//             |p| p.num_nibbles() < TEST_DIGEST_SIZE * 2,
-//         )
-//     ) -> NibblePath<TEST_DIGEST_SIZE> {
-//         nibble_path
-//     }
-// }
-
 impl<const N: usize> NibblePath<N> {
     pub const ROOT_NIBBLE_HEIGHT: usize = N * 2;
     /// Creates a new `NibblePath` from a vector of bytes assuming each byte has 2 nibbles.
@@ -122,11 +89,6 @@ impl<const N: usize> NibblePath<N> {
         let num_nibbles = bytes.len() * 2 - 1;
         NibblePath { num_nibbles, bytes }
     }
-
-    // TODO: Remove completely unless needed
-    // pub fn new_from_state_key(state_key: &StateKey, num_nibbles: usize) -> Self {
-    //     NibblePath::new_from_byte_array(state_key.hash().as_ref(), num_nibbles)
-    // }
 
     #[cfg(test)]
     fn new_from_byte_array(bytes: &[u8], num_nibbles: usize) -> Self {
