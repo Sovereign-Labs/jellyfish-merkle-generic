@@ -130,7 +130,8 @@ pub trait TreeReader<K, H, const N: usize> {
     // // TODO
     /// Gets node given a node key. Returns error if the node does not exist.
     ///
-    /// Recommended impl: ```no_run
+    /// Recommended impl:
+    /// ```ignore
     /// self.get_node_option(node_key)?.ok_or_else(|| Self::Error::from(format!("Missing node at {:?}.", node_key)))
     /// ```
     fn get_node(&self, node_key: &NodeKey<N>) -> Result<Node<K, H, N>, Self::Error>;
@@ -726,5 +727,97 @@ impl<const N: usize> NibbleExt<N> for HashValue<N> {
     /// Returns the length of common prefix of `self` and `other` in nibbles.
     fn common_prefix_nibbles_len(&self, other: HashValue<N>) -> usize {
         self.common_prefix_bits_len(other) / 4
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use proptest::prelude::Arbitrary;
+    use serde::ser;
+
+    use crate::{hash::HashValue, types::nibble::Nibble, Key};
+    use std::hash::Hash;
+
+    use super::NibbleExt;
+    type TestHashValue = HashValue<TEST_HASH_LENGTH>;
+    const TEST_HASH_LENGTH: usize = 32;
+    /// `TestKey` defines the types of data that can be stored in a Jellyfish Merkle tree and used in
+    /// tests.
+    #[cfg(any(test, feature = "fuzzing"))]
+    pub trait TestKey:
+        Key + Arbitrary + std::fmt::Debug + Eq + Hash + Ord + PartialOrd + PartialEq + 'static
+    {
+    }
+
+    /// `TestValue` defines the types of data that can be stored in a Jellyfish Merkle tree and used in
+    /// tests.
+    #[cfg(any(test, feature = "fuzzing"))]
+    pub trait TestValue: Key + Arbitrary + std::fmt::Debug + Eq + PartialEq + 'static {}
+
+    /// Provides a test_only_hash() method that can be used in tests on types that implement
+    /// `serde::Serialize`.
+    ///
+    /// # Example
+    /// ```
+    /// use aptos_crypto::hash::TestOnlyHash;
+    ///
+    /// b"hello world".test_only_hash();
+    /// ```
+    pub trait TestOnlyHash {
+        /// Generates a hash used only for tests.
+        fn test_only_hash(&self) -> TestHashValue;
+    }
+
+    impl<T: ser::Serialize + ?Sized> TestOnlyHash for T {
+        fn test_only_hash(&self) -> TestHashValue {
+            let bytes = bcs::to_bytes(self).expect("serialize failed during hash.");
+            HashValue::sha3_256_of(&bytes)
+        }
+    }
+
+    #[test]
+    fn test_common_prefix_nibbles_len() {
+        {
+            let hash1 = b"hello".test_only_hash();
+            let hash2 = b"HELLO".test_only_hash();
+            assert_eq!(hash1[0], 0b0011_0011);
+            assert_eq!(hash2[0], 0b1011_1000);
+            assert_eq!(hash1.common_prefix_nibbles_len(hash2), 0);
+        }
+        {
+            let hash1 = b"hello".test_only_hash();
+            let hash2 = b"world".test_only_hash();
+            assert_eq!(hash1[0], 0b0011_0011);
+            assert_eq!(hash2[0], 0b0100_0010);
+            assert_eq!(hash1.common_prefix_nibbles_len(hash2), 0);
+        }
+        {
+            let hash1 = b"hello".test_only_hash();
+            let hash2 = b"100011001000".test_only_hash();
+            assert_eq!(hash1[0], 0b0011_0011);
+            assert_eq!(hash2[0], 0b0011_0011);
+            assert_eq!(hash1[1], 0b0011_1000);
+            assert_eq!(hash2[1], 0b0010_0010);
+            assert_eq!(hash1.common_prefix_nibbles_len(hash2), 2);
+        }
+        {
+            let hash1 = b"hello".test_only_hash();
+            let hash2 = b"hello".test_only_hash();
+            assert_eq!(
+                hash1.common_prefix_nibbles_len(hash2),
+                TestHashValue::LENGTH * 2
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_nibble() {
+        let hash = b"hello".test_only_hash();
+        assert_eq!(hash.get_nibble(0), Nibble::from(3));
+        assert_eq!(hash.get_nibble(1), Nibble::from(3));
+        assert_eq!(hash.get_nibble(2), Nibble::from(3));
+        assert_eq!(hash.get_nibble(3), Nibble::from(8));
+        assert_eq!(hash.get_nibble(62), Nibble::from(9));
+        assert_eq!(hash.get_nibble(63), Nibble::from(2));
     }
 }

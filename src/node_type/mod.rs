@@ -214,6 +214,8 @@ pub struct InternalNode<H, const N: usize> {
     phantom_hasher: std::marker::PhantomData<H>,
 }
 
+// Derive is broken. See comment on SparseMerkleLeafNode<H, const N: usize>
+// TODO: Add a proptest to enforce correctness.
 impl<H, const N: usize> Clone for InternalNode<H, N> {
     fn clone(&self) -> Self {
         Self {
@@ -661,6 +663,8 @@ pub struct LeafNode<K, H, const N: usize> {
     phantom_hasher: std::marker::PhantomData<H>,
 }
 
+// Derive is broken. See comment on SparseMerkleLeafNode<H, const N: usize>
+// TODO: Add a proptest to enforce correctness.
 impl<K: Key, H, const N: usize> Clone for LeafNode<K, H, N> {
     fn clone(&self) -> Self {
         Self {
@@ -798,6 +802,8 @@ pub enum Node<K, H, const N: usize> {
     Null,
 }
 
+// Derive is broken. See comment on SparseMerkleLeafNode<H, const N: usize>
+// TODO: Add a proptest to enforce correctness.
 impl<K: Key, H, const N: usize> Clone for Node<K, H, N> {
     fn clone(&self) -> Self {
         match self {

@@ -369,6 +369,7 @@ pub struct SparseMerkleLeafNode<H, const N: usize> {
 //  1. Delete this manual impl
 //  2. Add #[derive(Clone)] annotation to SparseMerkleLeafNode<H, const N: usize>
 //  3. Profit
+// TODO: Add a proptest to enforce correctness
 impl<H, const N: usize> Clone for SparseMerkleLeafNode<H, N> {
     fn clone(&self) -> Self {
         Self {

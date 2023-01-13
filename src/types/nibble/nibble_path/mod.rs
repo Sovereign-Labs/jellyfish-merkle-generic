@@ -9,6 +9,8 @@
 // mod nibble_path_test;
 
 #[cfg(any(test, feature = "fuzzing"))]
+mod nibble_path_test;
+#[cfg(any(test, feature = "fuzzing"))]
 use proptest::{collection::vec, prelude::*};
 use serde::{Deserialize, Serialize};
 use std::{fmt, iter::FromIterator};
@@ -87,7 +89,7 @@ impl<const N: usize> Arbitrary for NibblePath<N> {
 //     }
 // }
 
-// TODO: Re-enable when test-time comes
+// // TODO: Re-enable when test-time comes
 // #[cfg(any(test, feature = "fuzzing"))]
 // prop_compose! {
 //     fn arb_internal_nibble_path()(
@@ -126,23 +128,23 @@ impl<const N: usize> NibblePath<N> {
     //     NibblePath::new_from_byte_array(state_key.hash().as_ref(), num_nibbles)
     // }
 
-    // TODO: Remove completely unless needed
-    // fn new_from_byte_array(bytes: &[u8], num_nibbles: usize) -> Self {
-    //     assert!(num_nibbles <= Self::ROOT_NIBBLE_HEIGHT);
-    //     if num_nibbles % 2 == 1 {
-    //         // Rounded up number of bytes to be considered
-    //         let num_bytes = (num_nibbles + 1) / 2;
-    //         assert!(bytes.len() >= num_bytes);
-    //         let mut nibble_bytes = bytes[..num_bytes].to_vec();
-    //         // If number of nibbles is odd, make sure to pad the last nibble with 0s.
-    //         let last_byte_padded = bytes[num_bytes - 1] & 0xF0;
-    //         nibble_bytes[num_bytes - 1] = last_byte_padded;
-    //         NibblePath::new_odd(nibble_bytes)
-    //     } else {
-    //         assert!(bytes.len() >= num_nibbles / 2);
-    //         NibblePath::new_even(bytes[..num_nibbles / 2].to_vec())
-    //     }
-    // }
+    #[cfg(any(test, feature = "fuzzing"))]
+    fn new_from_byte_array(bytes: &[u8], num_nibbles: usize) -> Self {
+        assert!(num_nibbles <= Self::ROOT_NIBBLE_HEIGHT);
+        if num_nibbles % 2 == 1 {
+            // Rounded up number of bytes to be considered
+            let num_bytes = (num_nibbles + 1) / 2;
+            assert!(bytes.len() >= num_bytes);
+            let mut nibble_bytes = bytes[..num_bytes].to_vec();
+            // If number of nibbles is odd, make sure to pad the last nibble with 0s.
+            let last_byte_padded = bytes[num_bytes - 1] & 0xF0;
+            nibble_bytes[num_bytes - 1] = last_byte_padded;
+            NibblePath::new_odd(nibble_bytes)
+        } else {
+            assert!(bytes.len() >= num_nibbles / 2);
+            NibblePath::new_even(bytes[..num_nibbles / 2].to_vec())
+        }
+    }
 
     /// Adds a nibble to the end of the nibble path.
     pub fn push(&mut self, nibble: Nibble) {
