@@ -7,13 +7,14 @@ use std::{
 
 use crate::{
     errors::{
+        self,
         CodecError::{self, InvalidNibblePathLength, InvalidNibblePathPadding},
         InternalNodeConstructionError, NodeDecodeError,
     },
     hash::{CryptoHasher, HashValue, TreeHash},
     metrics::{inc_internal_encoded_bytes_if_enabled, inc_leaf_encoded_bytes_if_enabled},
     proof::{NodeInProof, SparseMerkleLeafNode},
-    types::nibble::{nibble_path::NibblePath, Nibble},
+    types::nibble::{self, nibble_path::NibblePath, Nibble},
     Key, TreeReader, Version,
 };
 
@@ -173,6 +174,36 @@ pub struct Child<const N: usize> {
     pub node_type: NodeType,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+/// A type-erased [`Child`] - with no knowledge of the JMTs hash function or digest size.
+/// Allows the creation of database abstractions without excessive generics.
+///
+/// Introduces a slight inefficiency, since "hash" values have to be copied to transform from
+/// Vec to array types on conversion to [`Child`], but the performance impace should be negligble.
+pub struct PartialChild {
+    /// The hash value of this child node.
+    hash: Vec<u8>,
+    /// `version`, the `nibble_path` of the [`NodeKey`] of this [`InternalNode`] the child belongs
+    /// to and the child's index constitute the [`NodeKey`] to uniquely identify this child node
+    /// from the storage. Used by `[`NodeKey::gen_child_node_key`].
+    version: Version,
+    /// Indicates if the child is a leaf, or if it's an internal node, the total number of leaves
+    /// under it (though it can be unknown during migration).
+    node_type: NodeType,
+}
+
+impl<const N: usize> TryFrom<PartialChild> for Child<N> {
+    type Error = CodecError;
+
+    fn try_from(value: PartialChild) -> Result<Self, Self::Error> {
+        Ok(Self {
+            hash: HashValue::from_slice(value.hash)?,
+            version: value.version,
+            node_type: value.node_type,
+        })
+    }
+}
+
 impl<const N: usize> Child<N> {
     pub fn new(hash: HashValue<N>, version: Version, node_type: NodeType) -> Self {
         Self {
@@ -199,6 +230,7 @@ impl<const N: usize> Child<N> {
 /// 15, inclusive.
 // TODO(preston-evans98): change this to a Vec of tuples for better performance
 pub(crate) type Children<const N: usize> = HashMap<Nibble, Child<N>>;
+pub(crate) type PartialChildren = HashMap<Nibble, PartialChild>;
 
 /// Represents a 4-level subtree with 16 children at the bottom level. Theoretically, this reduces
 /// IOPS to query a tree by 4x since we compress 4 levels in a standard Merkle tree into 1 node.
@@ -222,6 +254,35 @@ impl<H, const N: usize> Clone for InternalNode<H, N> {
             leaf_count: self.leaf_count.clone(),
             phantom_hasher: self.phantom_hasher.clone(),
         }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+/// A type-erased [`InternalNode`] - with no knowledge of the JMTs hash function or digest size.
+/// Allows the creation of database abstractions without excessive generics.
+pub struct PartialInternalNode {
+    /// Up to 16 children.
+    children: PartialChildren,
+    /// Total number of leaves under this internal node
+    leaf_count: usize,
+}
+
+impl<H, const N: usize> TryFrom<PartialInternalNode> for InternalNode<H, N> {
+    type Error = CodecError;
+
+    fn try_from(value: PartialInternalNode) -> Result<Self, Self::Error> {
+        let children: Result<HashMap<Nibble, Child<N>>, CodecError> = value
+            .children
+            .into_iter()
+            .map::<Result<(Nibble, Child<N>), CodecError>, _>(|(k, v)| {
+                Ok((k, <PartialChild as TryInto<Child<N>>>::try_into(v)?))
+            })
+            .collect();
+        Ok(Self {
+            children: children?,
+            leaf_count: value.leaf_count,
+            phantom_hasher: std::marker::PhantomData,
+        })
     }
 }
 
@@ -664,6 +725,30 @@ pub struct LeafNode<K, H, const N: usize> {
     phantom_hasher: std::marker::PhantomData<H>,
 }
 
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+/// A type-erased [`LeafNode`] - with no knowledge of the JMTs hash function or digest size.
+/// Allows the creation of database abstractions without excessive generics.
+pub struct PartialLeafNode<K> {
+    account_key: Vec<u8>,
+    value_hash: Vec<u8>,
+    value_index: (K, Version),
+}
+
+impl<K, H, const N: usize> TryFrom<PartialLeafNode<K>> for LeafNode<K, H, N> {
+    type Error = errors::CodecError;
+
+    fn try_from(value: PartialLeafNode<K>) -> Result<Self, Self::Error> {
+        let account_key = HashValue::from_slice(value.account_key)?;
+        let value_hash = HashValue::from_slice(value.value_hash)?;
+        Ok(Self {
+            account_key,
+            value_hash,
+            value_index: value.value_index,
+            phantom_hasher: std::marker::PhantomData,
+        })
+    }
+}
+
 // Derive is broken. See comment on SparseMerkleLeafNode<H, const N: usize>
 impl<K: Key, H, const N: usize> Clone for LeafNode<K, H, N> {
     fn clone(&self) -> Self {
@@ -923,6 +1008,30 @@ where
             Some(NodeTag::Null) => Ok(Node::Null),
             None => Err(NodeDecodeError::UnknownTag { unknown_tag: tag }.into()),
         }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+/// A type-erased [`Node`] - with no knowledge of the JMTs hash function or digest size.
+/// Allows the creation of database abstractions without excessive generics.
+pub enum PartialNode<K> {
+    /// A wrapper of [`InternalNode`].
+    Internal(PartialInternalNode),
+    /// A wrapper of [`LeafNode`].
+    Leaf(PartialLeafNode<K>),
+    /// Represents empty tree only
+    Null,
+}
+
+impl<K, H, const N: usize> TryFrom<PartialNode<K>> for Node<K, H, N> {
+    type Error = CodecError;
+
+    fn try_from(value: PartialNode<K>) -> Result<Self, Self::Error> {
+        Ok(match value {
+            PartialNode::Internal(n) => Self::Internal(n.try_into()?),
+            PartialNode::Leaf(n) => Self::Leaf(n.try_into()?),
+            PartialNode::Null => Self::Null,
+        })
     }
 }
 
