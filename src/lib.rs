@@ -61,6 +61,9 @@
 //! jellyfish is an [`InternalNode`] while each tentacle is a [`LeafNode`]. It is noted that
 //! Jellyfish merkle doesn't have a counterpart for `extension` node of ethereum patricia merkle.
 //!
+//! This implementation of the JMT stores only value hashes and not the values themselves. For
+//! context on this decision, see [Aptos Core Issue 402](https://github.com/aptos-labs/aptos-core/issues/402)
+//!
 //! [`JellyfishMerkleTree`]: struct.JellyfishMerkleTree.html
 //! [`new`]: struct.JellyfishMerkleTree.html#method.new
 //! [`put_value_sets`]: struct.JellyfishMerkleTree.html#method.put_value_sets
@@ -202,6 +205,8 @@ impl<const N: usize> std::fmt::Display for ValueHash<N> {
         std::fmt::Display::fmt(&self.0, f)
     }
 }
+/// The hash of a node in the JMT. Alias for HashOutput<N>
+pub type NodeHash<const N: usize> = HashOutput<N>;
 
 /// Indicates a node becomes stale since `stale_since_version`.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -379,8 +384,8 @@ where
     fn get_hash(
         node_key: &NodeKey<N>,
         node: &Node<K, H, N>,
-        hash_cache: &Option<&HashMap<NibblePath<N>, HashOutput<N>>>,
-    ) -> HashOutput<N> {
+        hash_cache: &Option<&HashMap<NibblePath<N>, NodeHash<N>>>,
+    ) -> NodeHash<N> {
         if let Some(cache) = hash_cache {
             match cache.get(node_key.nibble_path()) {
                 Some(hash) => *hash,
@@ -436,10 +441,10 @@ where
     pub fn batch_put_value_set(
         &self,
         value_set: Vec<(KeyHash<N>, Option<&(ValueHash<N>, K)>)>,
-        node_hashes: Option<&HashMap<NibblePath<N>, HashOutput<N>>>,
+        node_hashes: Option<&HashMap<NibblePath<N>, NodeHash<N>>>,
         persisted_version: Option<Version>,
         version: Version,
-    ) -> Result<(HashOutput<N>, TreeUpdateBatch<K, H, N>), JmtError<R::Error>> {
+    ) -> Result<(NodeHash<N>, TreeUpdateBatch<K, H, N>), JmtError<R::Error>> {
         let deduped_and_sorted_kvs = value_set
             .into_iter()
             .collect::<BTreeMap<_, _>>()
@@ -490,7 +495,7 @@ where
         version: Version,
         kvs: &[(KeyHash<N>, Option<&(ValueHash<N>, K)>)],
         depth: usize,
-        hash_cache: &Option<&HashMap<NibblePath<N>, HashOutput<N>>>,
+        hash_cache: &Option<&HashMap<NibblePath<N>, NodeHash<N>>>,
         batch: &mut TreeUpdateBatch<K, H, N>,
     ) -> Result<Option<Node<K, H, N>>, JmtError<R::Error>> {
         let node = self.reader.get_node(node_key)?;
@@ -592,7 +597,7 @@ where
         left: usize,
         right: usize,
         depth: usize,
-        hash_cache: &Option<&HashMap<NibblePath<N>, HashOutput<N>>>,
+        hash_cache: &Option<&HashMap<NibblePath<N>, NodeHash<N>>>,
         batch: &mut TreeUpdateBatch<K, H, N>,
     ) -> Result<(Nibble, Option<Node<K, H, N>>), JmtError<R::Error>> {
         let child_index = kvs[left].0.get_nibble(depth);
@@ -627,7 +632,7 @@ where
         existing_leaf_node: LeafNode<K, H, N>,
         kvs: &[(KeyHash<N>, Option<&(ValueHash<N>, K)>)],
         depth: usize,
-        hash_cache: &Option<&HashMap<NibblePath<N>, HashOutput<N>>>,
+        hash_cache: &Option<&HashMap<NibblePath<N>, NodeHash<N>>>,
         batch: &mut TreeUpdateBatch<K, H, N>,
     ) -> Result<Option<Node<K, H, N>>, JmtError<R::Error>> {
         let existing_leaf_key = existing_leaf_node.account_key();
@@ -715,7 +720,7 @@ where
         version: Version,
         kvs: &[(KeyHash<N>, Option<&(ValueHash<N>, K)>)],
         depth: usize,
-        hash_cache: &Option<&HashMap<NibblePath<N>, HashOutput<N>>>,
+        hash_cache: &Option<&HashMap<NibblePath<N>, NodeHash<N>>>,
         batch: &mut TreeUpdateBatch<K, H, N>,
     ) -> Result<Option<Node<K, H, N>>, JmtError<R::Error>> {
         if kvs.len() == 1 {
@@ -783,7 +788,7 @@ where
         &self,
         value_set: Vec<(KeyHash<N>, Option<&(ValueHash<N>, K)>)>,
         version: Version,
-    ) -> Result<(HashOutput<N>, TreeUpdateBatch<K, H, N>), JmtError<R::Error>> {
+    ) -> Result<(NodeHash<N>, TreeUpdateBatch<K, H, N>), JmtError<R::Error>> {
         self.batch_put_value_set(
             value_set.into_iter().map(|(k, v)| (k, v)).collect(),
             None,
@@ -935,14 +940,14 @@ where
             .map_err(|e| e.into())
     }
 
-    pub fn get_root_hash(&self, version: Version) -> Result<HashOutput<N>, JmtError<R::Error>> {
+    pub fn get_root_hash(&self, version: Version) -> Result<NodeHash<N>, JmtError<R::Error>> {
         self.get_root_node(version).map(|n| n.hash())
     }
 
     pub fn get_root_hash_option(
         &self,
         version: Version,
-    ) -> Result<Option<HashOutput<N>>, JmtError<R::Error>> {
+    ) -> Result<Option<NodeHash<N>>, JmtError<R::Error>> {
         Ok(self.get_root_node_option(version)?.map(|n| n.hash()))
     }
 
