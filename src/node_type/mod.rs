@@ -11,14 +11,14 @@ use crate::{
         CodecError::{self, InvalidNibblePathLength, InvalidNibblePathPadding},
         InternalNodeConstructionError, NodeDecodeError,
     },
-    hash::{CryptoHasher, HashValue, TreeHash},
+    hash::{CryptoHasher, HashOutput, TreeHash},
     metrics::{inc_internal_encoded_bytes_if_enabled, inc_leaf_encoded_bytes_if_enabled},
     proof::{NodeInProof, SparseMerkleLeafNode},
     types::nibble::{
         nibble_path::{NibblePath, PhysicalNibblePath},
         Nibble,
     },
-    Key, TreeReader, Version,
+    Key, KeyHash, TreeReader, ValueHash, Version,
 };
 
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -139,9 +139,9 @@ impl<const N: usize> NodeKey<N> {
         let mut reader = Cursor::new(val);
         let version = reader.read_u64::<BigEndian>()?;
         let num_nibbles = reader.read_u8()? as usize;
-        if !num_nibbles <= HashValue::<N>::ROOT_NIBBLE_HEIGHT {
+        if !num_nibbles <= HashOutput::<N>::ROOT_NIBBLE_HEIGHT {
             return Err(CodecError::NibblePathTooLong {
-                max: HashValue::<N>::ROOT_NIBBLE_HEIGHT,
+                max: HashOutput::<N>::ROOT_NIBBLE_HEIGHT,
                 got: num_nibbles,
             });
         }
@@ -202,7 +202,7 @@ impl Arbitrary for NodeType {
 #[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
 pub struct Child<const N: usize> {
     /// The hash value of this child node.
-    pub hash: HashValue<N>,
+    pub hash: HashOutput<N>,
     /// `version`, the `nibble_path` of the [`NodeKey`] of this [`InternalNode`] the child belongs
     /// to and the child's index constitute the [`NodeKey`] to uniquely identify this child node
     /// from the storage. Used by `[`NodeKey::gen_child_node_key`].
@@ -235,7 +235,7 @@ impl<const N: usize> TryFrom<PartialChild> for Child<N> {
 
     fn try_from(value: PartialChild) -> Result<Self, Self::Error> {
         Ok(Self {
-            hash: HashValue::from_slice(value.hash)?,
+            hash: HashOutput::from_slice(value.hash)?,
             version: value.version,
             node_type: value.node_type,
         })
@@ -243,7 +243,7 @@ impl<const N: usize> TryFrom<PartialChild> for Child<N> {
 }
 
 impl<const N: usize> Child<N> {
-    pub fn new(hash: HashValue<N>, version: Version, node_type: NodeType) -> Self {
+    pub fn new(hash: HashOutput<N>, version: Version, node_type: NodeType) -> Self {
         Self {
             hash,
             version,
@@ -430,7 +430,7 @@ impl<H: TreeHash<N>, const N: usize> InternalNode<H, N> {
         }
     }
 
-    pub fn hash(&self) -> HashValue<N> {
+    pub fn hash(&self) -> HashOutput<N> {
         self.merkle_hash(
             0,  /* start index */
             16, /* the number of leaves in the subtree of which we want the hash of root */
@@ -492,17 +492,17 @@ impl<H: TreeHash<N>, const N: usize> InternalNode<H, N> {
             let pos = reader.position() as usize;
             let remaining = len - pos;
 
-            if !remaining >= size_of::<HashValue<N>>() {
+            if !remaining >= size_of::<HashOutput<N>>() {
                 return Err(CodecError::DataTooShort {
                     remaining,
-                    desired_type: std::any::type_name::<HashValue<N>>(),
-                    needed: size_of::<HashValue<N>>(),
+                    desired_type: std::any::type_name::<HashOutput<N>>(),
+                    needed: size_of::<HashOutput<N>>(),
                 });
             }
 
             let hash =
-                HashValue::from_slice(&reader.get_ref()[pos..pos + size_of::<HashValue<N>>()])?;
-            reader.seek(SeekFrom::Current(size_of::<HashValue<N>>() as i64))?;
+                HashOutput::from_slice(&reader.get_ref()[pos..pos + size_of::<HashOutput<N>>()])?;
+            reader.seek(SeekFrom::Current(size_of::<HashOutput<N>>() as i64))?;
 
             let child_bit = 1 << next_child;
             let node_type = if (leaf_bitmap & child_bit) != 0 {
@@ -561,7 +561,7 @@ impl<H: TreeHash<N>, const N: usize> InternalNode<H, N> {
         start: u8,
         width: u8,
         (existence_bitmap, leaf_bitmap): (u16, u16),
-    ) -> HashValue<N> {
+    ) -> HashOutput<N> {
         // Given a bit [start, 1 << nibble_height], return the value of that range.
         let (range_existence_bitmap, range_leaf_bitmap) =
             Self::range_bitmaps(start, width, (existence_bitmap, leaf_bitmap));
@@ -755,9 +755,9 @@ pub(crate) fn get_child_and_sibling_half_start(n: Nibble, height: u8) -> (u8, u8
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LeafNode<K, H, const N: usize> {
     // The hashed key associated with this leaf node.
-    account_key: HashValue<N>,
+    account_key: KeyHash<N>,
     // The hash of the value.
-    value_hash: HashValue<N>,
+    value_hash: ValueHash<N>,
     // The key and version that points to the value
     value_index: (K, Version),
     phantom_hasher: std::marker::PhantomData<H>,
@@ -776,8 +776,8 @@ impl<K, H, const N: usize> TryFrom<PartialLeafNode<K>> for LeafNode<K, H, N> {
     type Error = errors::CodecError;
 
     fn try_from(value: PartialLeafNode<K>) -> Result<Self, Self::Error> {
-        let account_key = HashValue::from_slice(value.account_key)?;
-        let value_hash = HashValue::from_slice(value.value_hash)?;
+        let account_key = KeyHash(HashOutput::from_slice(value.account_key)?);
+        let value_hash = ValueHash(HashOutput::from_slice(value.value_hash)?);
         Ok(Self {
             account_key,
             value_hash,
@@ -806,8 +806,8 @@ where
 {
     /// Creates a new leaf node.
     pub fn new(
-        account_key: HashValue<N>,
-        value_hash: HashValue<N>,
+        account_key: KeyHash<N>,
+        value_hash: ValueHash<N>,
         value_index: (K, Version),
     ) -> Self {
         Self {
@@ -819,12 +819,12 @@ where
     }
 
     /// Gets the account key, the hashed account address.
-    pub fn account_key(&self) -> HashValue<N> {
+    pub fn account_key(&self) -> KeyHash<N> {
         self.account_key
     }
 
     /// Gets the associated value hash.
-    pub fn value_hash(&self) -> HashValue<N> {
+    pub fn value_hash(&self) -> ValueHash<N> {
         self.value_hash
     }
 
@@ -833,13 +833,13 @@ where
         &self.value_index
     }
 
-    pub fn hash(&self) -> HashValue<N> {
+    pub fn hash(&self) -> HashOutput<N> {
         SparseMerkleLeafNode::<H, N>::new(self.account_key, self.value_hash).hash()
     }
 
     pub fn serialize(&self, binary: &mut Vec<u8>) -> Result<(), CodecError> {
-        binary.extend_from_slice(self.account_key.as_ref());
-        binary.extend_from_slice(self.value_hash.as_ref());
+        binary.extend_from_slice(self.account_key.0.as_ref());
+        binary.extend_from_slice(self.value_hash.0.as_ref());
         binary.write_u32::<LittleEndian>(self.value_index.0.key_size() as u32)?;
         binary.extend_from_slice(self.value_index.0.as_ref());
         binary.write_u64::<LittleEndian>(self.value_index.1)?;
@@ -856,8 +856,8 @@ where
                 needed: (2 * N) + 4 + 8,
             });
         }
-        let account_key = HashValue::<N>::from_slice(&data[..N])?;
-        let value_hash = HashValue::<N>::from_slice(&data[N..2 * N])?;
+        let account_key = KeyHash(HashOutput::<N>::from_slice(&data[..N])?);
+        let value_hash = ValueHash(HashOutput::<N>::from_slice(&data[N..2 * N])?);
         let mut cursor = std::io::Cursor::new(&data[2 * N..]);
         let key_len = cursor.read_u32::<LittleEndian>()?;
         let key_slice = &data[(cursor.position() as usize)..][..key_len as usize];
@@ -971,8 +971,8 @@ where
 
     /// Creates the [`Leaf`](Node::Leaf) variant.
     pub fn new_leaf(
-        account_key: HashValue<N>,
-        value_hash: HashValue<N>,
+        account_key: KeyHash<N>,
+        value_hash: ValueHash<N>,
         value_index: (K, Version),
     ) -> Self {
         Node::Leaf(LeafNode::new(account_key, value_hash, value_index))
@@ -1026,7 +1026,7 @@ where
     }
 
     /// Computes the hash of nodes.
-    pub fn hash(&self) -> HashValue<N> {
+    pub fn hash(&self) -> HashOutput<N> {
         match self {
             Node::Internal(internal_node) => internal_node.hash(),
             Node::Leaf(leaf_node) => leaf_node.hash(),
@@ -1115,13 +1115,13 @@ where
 }
 
 pub struct MerkleTreeInternalNode<H, const N: usize> {
-    left_child: HashValue<N>,
-    right_child: HashValue<N>,
+    left_child: HashOutput<N>,
+    right_child: HashOutput<N>,
     hasher: std::marker::PhantomData<H>,
 }
 
 impl<H: TreeHash<N>, const N: usize> MerkleTreeInternalNode<H, N> {
-    pub fn new(left_child: HashValue<N>, right_child: HashValue<N>) -> Self {
+    pub fn new(left_child: HashOutput<N>, right_child: HashOutput<N>) -> Self {
         Self {
             left_child,
             right_child,
@@ -1129,7 +1129,7 @@ impl<H: TreeHash<N>, const N: usize> MerkleTreeInternalNode<H, N> {
         }
     }
 
-    pub fn hash(&self) -> HashValue<N> {
+    pub fn hash(&self) -> HashOutput<N> {
         H::hasher()
             .update(self.left_child.as_ref())
             .update(self.right_child.as_ref())
@@ -1145,7 +1145,7 @@ mod tests {
         node_type::{InternalNode, LeafNode, Node, NodeTag},
         test_helper::ValueBlob,
         test_utils::TestHash,
-        HashValue,
+        KeyHash, ValueHash,
     };
 
     proptest! {
@@ -1160,7 +1160,7 @@ mod tests {
             }
 
             #[test]
-            fn test_clone_leaf_node(h1: HashValue<32>, h2: HashValue<32>, value: ValueBlob, version: u64) {
+            fn test_clone_leaf_node(h1: KeyHash<32>, h2: ValueHash<32>, value: ValueBlob, version: u64) {
                 let node: LeafNode<ValueBlob, TestHash, 32>= LeafNode::new(h1, h2, (value, version));
                 let clone = node.clone();
                 prop_assert_eq!(&clone, &node);

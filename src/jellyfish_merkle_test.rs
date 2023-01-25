@@ -22,24 +22,20 @@ const TEST_DIGEST_SIZE: usize = 32;
 type TestTreeStore = MockTreeStore<ValueBlob, TestHash, TEST_DIGEST_SIZE>;
 type TestJMT<'a> = JellyfishMerkleTree<'a, TestTreeStore, ValueBlob, TestHash, TEST_DIGEST_SIZE>;
 
-fn update_nibble<const N: usize>(
-    original_key: &HashValue<N>,
-    n: usize,
-    nibble: u8,
-) -> HashValue<N> {
+fn update_nibble<const N: usize>(original_key: &KeyHash<N>, n: usize, nibble: u8) -> KeyHash<N> {
     assert!(nibble < 16);
-    let mut key = original_key.to_vec();
+    let mut key = original_key.0.to_vec();
     key[n / 2] = if n % 2 == 0 {
         key[n / 2] & 0x0F | nibble << 4
     } else {
         key[n / 2] & 0xF0 | nibble
     };
-    HashValue::from_slice(&key).unwrap()
+    KeyHash(HashOutput::from_slice(&key).unwrap())
 }
 
 fn gen_leaf<H: TreeHash<N>, const N: usize>(
-    k: HashValue<N>,
-    v: &(HashValue<N>, ValueBlob),
+    k: KeyHash<N>,
+    v: &(ValueHash<N>, ValueBlob),
     version: Version,
 ) -> Node<ValueBlob, H, N> {
     LeafNode::<ValueBlob, H, N>::new(k, v.0, (v.1.clone(), version)).into()
@@ -52,9 +48,9 @@ fn test_insert_to_empty_tree() {
 
     // Tree is initially empty. Root is a null node. We'll insert a key-value pair which creates a
     // leaf node.
-    let key = HashValue::random();
+    let key = KeyHash(HashOutput::random());
     let state_key = ValueBlob::from(vec![1u8, 2u8, 3u8, 4u8]);
-    let value_hash = HashValue::random();
+    let value_hash = ValueHash(HashOutput::random());
 
     // batch version
     let (_new_root_hash, batch) = tree
@@ -86,7 +82,7 @@ fn test_insert_at_leaf_with_internal_created() {
     let db = TestTreeStore::default();
     let tree = TestJMT::new(&db);
 
-    let key1 = HashValue::new([0x00u8; TEST_DIGEST_SIZE]);
+    let key1 = KeyHash(HashOutput::new([0x00u8; TEST_DIGEST_SIZE]));
     let value1 = gen_value();
 
     let (root0_hash, batch) = tree
@@ -169,7 +165,7 @@ fn test_insert_at_leaf_with_multiple_internals_created() {
     let tree = TestJMT::new(&db);
 
     // 1. Insert the first leaf into empty tree
-    let key1 = HashValue::new([0x00u8; TEST_DIGEST_SIZE]);
+    let key1 = KeyHash(HashOutput::new([0x00u8; TEST_DIGEST_SIZE]));
     let value1 = gen_value();
 
     let (_root0_hash, batch) = tree
@@ -292,7 +288,7 @@ fn test_batch_insertion() {
     //
     // Total: 12 nodes
     // ```
-    let key1 = HashValue::new([0x00u8; TEST_DIGEST_SIZE]);
+    let key1 = KeyHash(HashOutput::new([0x00u8; TEST_DIGEST_SIZE]));
     let value1 = gen_value();
 
     let key2 = update_nibble(&key1, 0, 2);
@@ -474,7 +470,7 @@ fn test_deletion() {
     //
     // Total: 12 nodes
     // ```
-    let key1 = HashValue::new([0x00u8; TEST_DIGEST_SIZE]);
+    let key1 = KeyHash(HashOutput::new([0x00u8; TEST_DIGEST_SIZE]));
     let value1 = gen_value();
 
     let key2 = update_nibble(&key1, 0, 2);
@@ -569,7 +565,7 @@ fn test_non_existence() {
     //               1        3
     // Total: 7 nodes
     // ```
-    let key1 = HashValue::new([0x00u8; TEST_DIGEST_SIZE]);
+    let key1 = KeyHash(HashOutput::new([0x00u8; TEST_DIGEST_SIZE]));
     let value1 = gen_value();
 
     let key2 = update_nibble(&key1, 0, 15);
@@ -623,7 +619,10 @@ fn test_non_existence() {
 fn test_missing_root() {
     let db = TestTreeStore::default();
     let tree = TestJMT::new(&db);
-    let err = tree.get_with_proof(HashValue::random(), 0).err().unwrap();
+    let err = tree
+        .get_with_proof(KeyHash(HashOutput::random()), 0)
+        .err()
+        .unwrap();
     if let JmtError::MissingRoot { version } = err {
         assert_eq!(version, 0);
     } else {
@@ -645,7 +644,7 @@ fn many_keys_get_proof_and_verify_tree_root(seed: &[u8], num_keys: usize) {
     let values: Vec<_> = (0..num_keys).map(|_i| gen_value()).collect();
 
     for (index, _) in values.iter().enumerate() {
-        let key = HashValue::random_with_rng(&mut rng);
+        let key = KeyHash(HashOutput::random_with_rng(&mut rng));
         kvs.push((key, Some(&values[index])));
     }
 
@@ -676,7 +675,7 @@ fn many_keys_deletion(seed: &[u8], num_keys: usize) {
     let values: Vec<_> = (0..2 * num_keys).map(|_i| gen_value()).collect();
 
     for (index, _) in values.iter().enumerate() {
-        let key = HashValue::random_with_rng(&mut rng);
+        let key = KeyHash(HashOutput::random_with_rng(&mut rng));
         first_batch.push((key, Some(&values[index])));
     }
 
@@ -687,7 +686,7 @@ fn many_keys_deletion(seed: &[u8], num_keys: usize) {
 
     let values: Vec<_> = (0..num_keys).map(|_i| gen_value()).collect();
     for (index, _) in values.iter().enumerate() {
-        let key = HashValue::random_with_rng(&mut rng);
+        let key = KeyHash(HashOutput::random_with_rng(&mut rng));
         second_batch.push((key, Some(&values[index])));
     }
 
@@ -746,7 +745,7 @@ fn many_versions_get_proof_and_verify_tree_root(seed: &[u8], num_versions: usize
     let new_values: Vec<_> = (0..num_versions).map(|_i| gen_value()).collect();
 
     for i in 0..num_versions {
-        let key = HashValue::random_with_rng(&mut rng);
+        let key = KeyHash(HashOutput::random_with_rng(&mut rng));
         kvs.push((key, Some(&values[i]), Some(&new_values[i])));
     }
 
@@ -814,7 +813,7 @@ proptest! {
     }
 
     #[test]
-    fn proptest_get_leaf_count(keys in hash_set(any::<HashValue<TEST_DIGEST_SIZE>>(), 3..2000)) {
+    fn proptest_get_leaf_count(keys in hash_set(any::<KeyHash<TEST_DIGEST_SIZE>>(), 3..2000)) {
         test_get_leaf_count(keys)
     }
 }

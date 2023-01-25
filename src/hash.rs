@@ -17,12 +17,12 @@ use tiny_keccak::{Hasher, Sha3};
 
 /// Output value of a function. Intentionally opaque for safety and modularity.
 #[derive(Clone, Copy, Eq, Hash, PartialEq, PartialOrd, Ord)]
-pub struct HashValue<const N: usize> {
+pub struct HashOutput<const N: usize> {
     hash: [u8; N],
 }
 
 #[cfg(any(test, feature = "fuzzing"))]
-impl<const N: usize> Arbitrary for HashValue<N> {
+impl<const N: usize> Arbitrary for HashOutput<N> {
     type Parameters = ();
 
     // TODO(preston-evans98): revert to more efficient impl below once proptest supports const generics
@@ -34,7 +34,7 @@ impl<const N: usize> Arbitrary for HashValue<N> {
             .prop_map(|bytes| {
                 let mut out = [0u8; N];
                 out.copy_from_slice(bytes.as_ref());
-                HashValue::new(out)
+                HashOutput::new(out)
             })
             .boxed()
     }
@@ -42,7 +42,7 @@ impl<const N: usize> Arbitrary for HashValue<N> {
     type Strategy = BoxedStrategy<Self>;
 }
 
-impl<const N: usize> HashValue<N> {
+impl<const N: usize> HashOutput<N> {
     /// The length of the hash in bytes.
     pub const LENGTH: usize = N;
     /// The length of the hash in bits.
@@ -53,7 +53,7 @@ impl<const N: usize> HashValue<N> {
 
     /// Create a new [`HashValue`] from a byte array.
     pub const fn new(hash: [u8; N]) -> Self {
-        HashValue { hash }
+        HashOutput { hash }
     }
 
     /// Create from a slice (e.g. retrieved from storage).
@@ -70,7 +70,7 @@ impl<const N: usize> HashValue<N> {
 
     /// Creates a zero-initialized instance.
     pub const fn zero() -> Self {
-        HashValue { hash: [0; N] }
+        HashOutput { hash: [0; N] }
     }
 
     /// Create a cryptographically random instance.
@@ -80,14 +80,14 @@ impl<const N: usize> HashValue<N> {
 
         let mut rng = OsRng;
         let hash: [u8; N] = rng.gen();
-        HashValue { hash }
+        HashOutput { hash }
     }
 
     /// Creates a random instance with given rng. Useful in unit tests.
     #[cfg(any(test, feature = "fuzzing"))]
     pub fn random_with_rng<R: rand::Rng>(rng: &mut R) -> Self {
         let hash: [u8; N] = rng.gen();
-        HashValue { hash }
+        HashOutput { hash }
     }
 
     /// Convenience function that computes a `HashValue` internally equal to
@@ -100,7 +100,7 @@ impl<const N: usize> HashValue<N> {
     pub fn sha3_256_of(buffer: &[u8]) -> Self {
         let mut sha3 = Sha3::v256();
         sha3.update(buffer);
-        HashValue::from_keccak(sha3)
+        HashOutput::from_keccak(sha3)
     }
 
     #[cfg(any(test, feature = "fuzzing"))]
@@ -112,7 +112,7 @@ impl<const N: usize> HashValue<N> {
         for buffer in buffers {
             sha3.update(buffer);
         }
-        HashValue::from_keccak(sha3)
+        HashOutput::from_keccak(sha3)
     }
 
     #[cfg(any(test, feature = "fuzzing"))]
@@ -166,7 +166,7 @@ impl<const N: usize> HashValue<N> {
     }
 
     /// Returns the length of common prefix of `self` and `other` in bits.
-    pub fn common_prefix_bits_len(&self, other: HashValue<N>) -> usize {
+    pub fn common_prefix_bits_len(&self, other: HashOutput<N>) -> usize {
         self.iter_bits()
             .zip(other.iter_bits())
             .take_while(|(x, y)| x == y)
@@ -203,7 +203,7 @@ impl<const N: usize> HashValue<N> {
     }
 }
 
-impl<const N: usize> ser::Serialize for HashValue<N> {
+impl<const N: usize> ser::Serialize for HashOutput<N> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: ser::Serializer,
@@ -237,14 +237,14 @@ impl<const N: usize> MyFromHex for [u8; N] {
     }
 }
 
-impl<'de, const N: usize> de::Deserialize<'de> for HashValue<N> {
+impl<'de, const N: usize> de::Deserialize<'de> for HashOutput<N> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: de::Deserializer<'de>,
     {
         if deserializer.is_human_readable() {
             let encoded_hash = <String>::deserialize(deserializer)?;
-            HashValue::from_hex(encoded_hash.as_str())
+            HashOutput::from_hex(encoded_hash.as_str())
                 .map_err(<D::Error as ::serde::de::Error>::custom)
         } else {
             // // See comment in serialize.
@@ -265,19 +265,19 @@ impl<'de, const N: usize> de::Deserialize<'de> for HashValue<N> {
     }
 }
 
-impl<const N: usize> Default for HashValue<N> {
+impl<const N: usize> Default for HashOutput<N> {
     fn default() -> Self {
-        HashValue::zero()
+        HashOutput::zero()
     }
 }
 
-impl<const N: usize> AsRef<[u8; N]> for HashValue<N> {
+impl<const N: usize> AsRef<[u8; N]> for HashOutput<N> {
     fn as_ref(&self) -> &[u8; N] {
         &self.hash
     }
 }
 
-impl<const N: usize> std::ops::Deref for HashValue<N> {
+impl<const N: usize> std::ops::Deref for HashOutput<N> {
     type Target = [u8; N];
 
     fn deref(&self) -> &Self::Target {
@@ -285,7 +285,7 @@ impl<const N: usize> std::ops::Deref for HashValue<N> {
     }
 }
 
-impl<const N: usize> std::ops::Index<usize> for HashValue<N> {
+impl<const N: usize> std::ops::Index<usize> for HashOutput<N> {
     type Output = u8;
 
     fn index(&self, s: usize) -> &u8 {
@@ -293,7 +293,7 @@ impl<const N: usize> std::ops::Index<usize> for HashValue<N> {
     }
 }
 
-impl<const N: usize> fmt::Binary for HashValue<N> {
+impl<const N: usize> fmt::Binary for HashOutput<N> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for byte in &self.hash {
             write!(f, "{byte:08b}")?;
@@ -302,7 +302,7 @@ impl<const N: usize> fmt::Binary for HashValue<N> {
     }
 }
 
-impl<const N: usize> fmt::LowerHex for HashValue<N> {
+impl<const N: usize> fmt::LowerHex for HashOutput<N> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
             write!(f, "0x")?;
@@ -314,7 +314,7 @@ impl<const N: usize> fmt::LowerHex for HashValue<N> {
     }
 }
 
-impl<const N: usize> fmt::Debug for HashValue<N> {
+impl<const N: usize> fmt::Debug for HashOutput<N> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "HashValue(")?;
         <Self as fmt::LowerHex>::fmt(self, f)?;
@@ -324,7 +324,7 @@ impl<const N: usize> fmt::Debug for HashValue<N> {
 }
 
 /// Will print shortened (4 bytes) hash
-impl<const N: usize> fmt::Display for HashValue<N> {
+impl<const N: usize> fmt::Display for HashOutput<N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for byte in self.hash.iter().take(4) {
             write!(f, "{byte:02x}")?;
@@ -340,11 +340,11 @@ impl<const N: usize> fmt::Display for HashValue<N> {
 //     }
 // }
 
-impl<const N: usize> FromStr for HashValue<N> {
+impl<const N: usize> FromStr for HashOutput<N> {
     type Err = HashValueParseError;
 
     fn from_str(s: &str) -> Result<Self, HashValueParseError> {
-        HashValue::from_hex(s)
+        HashOutput::from_hex(s)
     }
 }
 
@@ -371,10 +371,10 @@ pub struct HashValueBitIterator<'a, const N: usize> {
 
 impl<'a, const N: usize> HashValueBitIterator<'a, N> {
     /// Constructs a new `HashValueBitIterator` using given `HashValue`.
-    fn new(hash_value: &'a HashValue<N>) -> Self {
+    fn new(hash_value: &'a HashOutput<N>) -> Self {
         HashValueBitIterator {
             hash_bytes: hash_value.as_ref(),
-            pos: (0..HashValue::<N>::LENGTH_IN_BITS),
+            pos: (0..HashOutput::<N>::LENGTH_IN_BITS),
         }
     }
 
@@ -410,8 +410,8 @@ impl<'a, const N: usize> std::iter::ExactSizeIterator for HashValueBitIterator<'
 
 pub trait TreeHash<const N: usize>: std::fmt::Debug + Send + Sync + std::cmp::PartialEq {
     type Hasher: CryptoHasher<N>;
-    const SPARSE_MERKLE_PLACEHOLDER_HASH: HashValue<N>;
-    fn hash(data: impl AsRef<[u8]>) -> HashValue<N> {
+    const SPARSE_MERKLE_PLACEHOLDER_HASH: HashOutput<N>;
+    fn hash(data: impl AsRef<[u8]>) -> HashOutput<N> {
         Self::Hasher::new().update(data.as_ref()).finalize()
     }
 
@@ -423,5 +423,5 @@ pub trait TreeHash<const N: usize>: std::fmt::Debug + Send + Sync + std::cmp::Pa
 pub trait CryptoHasher<const N: usize> {
     fn new() -> Self;
     fn update(self, data: &[u8]) -> Self;
-    fn finalize(self) -> HashValue<N>;
+    fn finalize(self) -> HashOutput<N>;
 }

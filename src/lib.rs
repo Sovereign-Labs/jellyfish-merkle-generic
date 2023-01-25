@@ -77,14 +77,14 @@ use std::{
 };
 
 use errors::CodecError;
-use hash::{HashValue, TreeHash};
+use hash::{HashOutput, HashValueBitIterator, TreeHash};
 use metrics::{inc_deletion_count_if_enabled, set_leaf_count_if_enabled};
 use node_type::{Child, Children, InternalNode, LeafNode, Node, NodeKey};
 use parallel::{parallel_process_range_if_enabled, run_on_io_pool_if_enabled};
 use proof::{SparseMerkleProof, SparseMerkleProofExt, SparseMerkleRangeProof};
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest_derive::Arbitrary;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 use types::nibble::{nibble_path::NibblePath, Nibble};
 
@@ -156,6 +156,51 @@ pub type NodeBatch<K, H, const N: usize> = HashMap<NodeKey<N>, Node<K, H, N>>;
 pub trait TreeWriter<K, H, const N: usize>: Send + Sync {
     type Error: std::error::Error + Send + Sync;
     fn write_node_batch(&self, node_batch: &NodeBatch<K, H, N>) -> Result<(), Self::Error>;
+}
+
+/// The hash of a key
+#[derive(Clone, Copy, Eq, Hash, PartialEq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
+pub struct KeyHash<const N: usize>(pub HashOutput<N>);
+
+impl<const N: usize> KeyHash<N> {
+    pub fn nibble(&self, index: usize) -> u8 {
+        self.0.nibble(index)
+    }
+    pub fn iter_bits(&self) -> HashValueBitIterator<N> {
+        self.0.iter_bits()
+    }
+
+    pub fn common_prefix_bits_len(&self, other: &Self) -> usize {
+        self.0.common_prefix_bits_len(other.0)
+    }
+}
+
+impl<const N: usize> NibbleExt<N> for KeyHash<N> {
+    fn get_nibble(&self, index: usize) -> Nibble {
+        self.0.get_nibble(index)
+    }
+
+    fn common_prefix_nibbles_len(&self, other: HashOutput<N>) -> usize {
+        self.0.common_prefix_nibbles_len(other)
+    }
+}
+
+impl<const N: usize> std::fmt::Display for KeyHash<N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+/// The hash of a value
+#[derive(Clone, Copy, Eq, Hash, PartialEq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
+pub struct ValueHash<const N: usize>(pub HashOutput<N>);
+
+impl<const N: usize> std::fmt::Display for ValueHash<N> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
 }
 
 /// Indicates a node becomes stale since `stale_since_version`.
@@ -248,15 +293,15 @@ where
 /// An iterator that iterates the index range (inclusive) of each different nibble at given
 /// `nibble_idx` of all the keys in a sorted key-value pairs which have the identical HashValue
 /// prefix (up to nibble_idx).
-pub struct NibbleRangeIterator<'a, K, const N: usize> {
-    sorted_kvs: &'a [(HashValue<N>, K)],
+pub struct NibbleRangeIterator<'a, V, const N: usize> {
+    sorted_kvs: &'a [(KeyHash<N>, V)],
     nibble_idx: usize,
     pos: usize,
 }
 
-impl<'a, K, const N: usize> NibbleRangeIterator<'a, K, N> {
-    fn new(sorted_kvs: &'a [(HashValue<N>, K)], nibble_idx: usize) -> Self {
-        assert!(nibble_idx < HashValue::<N>::ROOT_NIBBLE_HEIGHT);
+impl<'a, V, const N: usize> NibbleRangeIterator<'a, V, N> {
+    fn new(sorted_kvs: &'a [(KeyHash<N>, V)], nibble_idx: usize) -> Self {
+        assert!(nibble_idx < HashOutput::<N>::ROOT_NIBBLE_HEIGHT);
         NibbleRangeIterator {
             sorted_kvs,
             nibble_idx,
@@ -265,7 +310,7 @@ impl<'a, K, const N: usize> NibbleRangeIterator<'a, K, N> {
     }
 }
 
-impl<'a, K, const N: usize> std::iter::Iterator for NibbleRangeIterator<'a, K, N> {
+impl<'a, V, const N: usize> std::iter::Iterator for NibbleRangeIterator<'a, V, N> {
     type Item = (usize, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -334,8 +379,8 @@ where
     fn get_hash(
         node_key: &NodeKey<N>,
         node: &Node<K, H, N>,
-        hash_cache: &Option<&HashMap<NibblePath<N>, HashValue<N>>>,
-    ) -> HashValue<N> {
+        hash_cache: &Option<&HashMap<NibblePath<N>, HashOutput<N>>>,
+    ) -> HashOutput<N> {
         if let Some(cache) = hash_cache {
             match cache.get(node_key.nibble_path()) {
                 Some(hash) => *hash,
@@ -390,11 +435,11 @@ where
     /// the batch is not reachable from public interfaces before being committed.
     pub fn batch_put_value_set(
         &self,
-        value_set: Vec<(HashValue<N>, Option<&(HashValue<N>, K)>)>,
-        node_hashes: Option<&HashMap<NibblePath<N>, HashValue<N>>>,
+        value_set: Vec<(KeyHash<N>, Option<&(ValueHash<N>, K)>)>,
+        node_hashes: Option<&HashMap<NibblePath<N>, HashOutput<N>>>,
         persisted_version: Option<Version>,
         version: Version,
-    ) -> Result<(HashValue<N>, TreeUpdateBatch<K, H, N>), JmtError<R::Error>> {
+    ) -> Result<(HashOutput<N>, TreeUpdateBatch<K, H, N>), JmtError<R::Error>> {
         let deduped_and_sorted_kvs = value_set
             .into_iter()
             .collect::<BTreeMap<_, _>>()
@@ -443,9 +488,9 @@ where
         &self,
         node_key: &NodeKey<N>,
         version: Version,
-        kvs: &[(HashValue<N>, Option<&(HashValue<N>, K)>)],
+        kvs: &[(KeyHash<N>, Option<&(ValueHash<N>, K)>)],
         depth: usize,
-        hash_cache: &Option<&HashMap<NibblePath<N>, HashValue<N>>>,
+        hash_cache: &Option<&HashMap<NibblePath<N>, HashOutput<N>>>,
         batch: &mut TreeUpdateBatch<K, H, N>,
     ) -> Result<Option<Node<K, H, N>>, JmtError<R::Error>> {
         let node = self.reader.get_node(node_key)?;
@@ -543,11 +588,11 @@ where
         node_key: &NodeKey<N>,
         internal_node: &InternalNode<H, N>,
         version: Version,
-        kvs: &[(HashValue<N>, Option<&(HashValue<N>, K)>)],
+        kvs: &[(KeyHash<N>, Option<&(ValueHash<N>, K)>)],
         left: usize,
         right: usize,
         depth: usize,
-        hash_cache: &Option<&HashMap<NibblePath<N>, HashValue<N>>>,
+        hash_cache: &Option<&HashMap<NibblePath<N>, HashOutput<N>>>,
         batch: &mut TreeUpdateBatch<K, H, N>,
     ) -> Result<(Nibble, Option<Node<K, H, N>>), JmtError<R::Error>> {
         let child_index = kvs[left].0.get_nibble(depth);
@@ -580,9 +625,9 @@ where
         node_key: &NodeKey<N>,
         version: Version,
         existing_leaf_node: LeafNode<K, H, N>,
-        kvs: &[(HashValue<N>, Option<&(HashValue<N>, K)>)],
+        kvs: &[(KeyHash<N>, Option<&(ValueHash<N>, K)>)],
         depth: usize,
-        hash_cache: &Option<&HashMap<NibblePath<N>, HashValue<N>>>,
+        hash_cache: &Option<&HashMap<NibblePath<N>, HashOutput<N>>>,
         batch: &mut TreeUpdateBatch<K, H, N>,
     ) -> Result<Option<Node<K, H, N>>, JmtError<R::Error>> {
         let existing_leaf_key = existing_leaf_node.account_key();
@@ -668,9 +713,9 @@ where
         &self,
         node_key: &NodeKey<N>,
         version: Version,
-        kvs: &[(HashValue<N>, Option<&(HashValue<N>, K)>)],
+        kvs: &[(KeyHash<N>, Option<&(ValueHash<N>, K)>)],
         depth: usize,
-        hash_cache: &Option<&HashMap<NibblePath<N>, HashValue<N>>>,
+        hash_cache: &Option<&HashMap<NibblePath<N>, HashOutput<N>>>,
         batch: &mut TreeUpdateBatch<K, H, N>,
     ) -> Result<Option<Node<K, H, N>>, JmtError<R::Error>> {
         if kvs.len() == 1 {
@@ -736,9 +781,9 @@ where
     #[cfg(any(test, feature = "fuzzing"))]
     pub fn put_value_set_test(
         &self,
-        value_set: Vec<(HashValue<N>, Option<&(HashValue<N>, K)>)>,
+        value_set: Vec<(KeyHash<N>, Option<&(ValueHash<N>, K)>)>,
         version: Version,
-    ) -> Result<(HashValue<N>, TreeUpdateBatch<K, H, N>), JmtError<R::Error>> {
+    ) -> Result<(HashOutput<N>, TreeUpdateBatch<K, H, N>), JmtError<R::Error>> {
         self.batch_put_value_set(
             value_set.into_iter().map(|(k, v)| (k, v)).collect(),
             None,
@@ -750,11 +795,11 @@ where
     /// Returns the value (if applicable) and the corresponding merkle proof.
     pub fn get_with_proof(
         &self,
-        key: HashValue<N>,
+        key: KeyHash<N>,
         version: Version,
     ) -> Result<
         (
-            Option<(HashValue<N>, (K, Version))>,
+            Option<(ValueHash<N>, (K, Version))>,
             SparseMerkleProof<H, N>,
         ),
         JmtError<R::Error>,
@@ -765,11 +810,11 @@ where
 
     pub fn get_with_proof_ext(
         &self,
-        key: HashValue<N>,
+        key: KeyHash<N>,
         version: Version,
     ) -> Result<
         (
-            Option<(HashValue<N>, (K, Version))>,
+            Option<(ValueHash<N>, (K, Version))>,
             SparseMerkleProofExt<H, N>,
         ),
         JmtError<R::Error>,
@@ -777,7 +822,7 @@ where
         // Empty tree just returns proof with no sibling hash.
         let mut next_node_key = NodeKey::new_empty_path(version);
         let mut siblings = vec![];
-        let nibble_path = NibblePath::<N>::new_even(key.to_vec());
+        let nibble_path = NibblePath::<N>::new_even(key.0.to_vec());
         let mut nibble_iter = nibble_path.nibbles();
 
         // We limit the number of loops here deliberately to avoid potential cyclic graph bugs
@@ -794,7 +839,7 @@ where
                 Node::Internal(internal_node) => {
                     let queried_child_index = nibble_iter
                         .next()
-                        .ok_or_else(|| JmtError::PathTooShort(key.to_vec()))?;
+                        .ok_or_else(|| JmtError::PathTooShort(key.0.to_vec()))?;
                     let (child_node_key, mut siblings_in_internal) = internal_node
                         .get_child_with_siblings(
                             &next_node_key,
@@ -840,7 +885,7 @@ where
     /// Gets the proof that shows a list of keys up to `rightmost_key_to_prove` exist at `version`.
     pub fn get_range_proof(
         &self,
-        rightmost_key_to_prove: HashValue<N>,
+        rightmost_key_to_prove: KeyHash<N>,
         version: Version,
     ) -> Result<SparseMerkleRangeProof<H, N>, JmtError<R::Error>> {
         let (account, proof) = self.get_with_proof(rightmost_key_to_prove, version)?;
@@ -852,7 +897,7 @@ where
             .siblings()
             .iter()
             .rev()
-            .zip(rightmost_key_to_prove.iter_bits())
+            .zip(rightmost_key_to_prove.0.iter_bits())
             .filter_map(|(sibling, bit)| {
                 // We only need to keep the siblings on the right.
                 if !bit {
@@ -869,9 +914,9 @@ where
     #[cfg(any(test, feature = "fuzzing"))]
     pub fn get(
         &self,
-        key: HashValue<N>,
+        key: KeyHash<N>,
         version: Version,
-    ) -> Result<Option<HashValue<N>>, JmtError<R::Error>> {
+    ) -> Result<Option<ValueHash<N>>, JmtError<R::Error>> {
         Ok(self.get_with_proof(key, version)?.0.map(|x| x.0))
     }
 
@@ -890,14 +935,14 @@ where
             .map_err(|e| e.into())
     }
 
-    pub fn get_root_hash(&self, version: Version) -> Result<HashValue<N>, JmtError<R::Error>> {
+    pub fn get_root_hash(&self, version: Version) -> Result<HashOutput<N>, JmtError<R::Error>> {
         self.get_root_node(version).map(|n| n.hash())
     }
 
     pub fn get_root_hash_option(
         &self,
         version: Version,
-    ) -> Result<Option<HashValue<N>>, JmtError<R::Error>> {
+    ) -> Result<Option<HashOutput<N>>, JmtError<R::Error>> {
         Ok(self.get_root_node_option(version)?.map(|n| n.hash()))
     }
 
@@ -938,10 +983,10 @@ where
 
 trait NibbleExt<const N: usize> {
     fn get_nibble(&self, index: usize) -> Nibble;
-    fn common_prefix_nibbles_len(&self, other: HashValue<N>) -> usize;
+    fn common_prefix_nibbles_len(&self, other: HashOutput<N>) -> usize;
 }
 
-impl<const N: usize> NibbleExt<N> for HashValue<N> {
+impl<const N: usize> NibbleExt<N> for HashOutput<N> {
     /// Returns the `index`-th nibble.
     fn get_nibble(&self, index: usize) -> Nibble {
         Nibble::from(if index % 2 == 0 {
@@ -952,7 +997,7 @@ impl<const N: usize> NibbleExt<N> for HashValue<N> {
     }
 
     /// Returns the length of common prefix of `self` and `other` in nibbles.
-    fn common_prefix_nibbles_len(&self, other: HashValue<N>) -> usize {
+    fn common_prefix_nibbles_len(&self, other: HashOutput<N>) -> usize {
         self.common_prefix_bits_len(other) / 4
     }
 }
@@ -963,7 +1008,7 @@ pub mod test_utils {
     use tiny_keccak::{Hasher, Sha3};
 
     use crate::{
-        hash::{CryptoHasher, HashValue, TreeHash},
+        hash::{CryptoHasher, HashOutput, TreeHash},
         Key,
     };
 
@@ -981,8 +1026,8 @@ pub mod test_utils {
     impl TreeHash<32> for TestHash {
         type Hasher = TestHasher;
 
-        const SPARSE_MERKLE_PLACEHOLDER_HASH: crate::hash::HashValue<32> =
-            HashValue::new(*b"SPARSE_MERKLE_PLACEHOLDER_HASH\0\0");
+        const SPARSE_MERKLE_PLACEHOLDER_HASH: crate::hash::HashOutput<32> =
+            HashOutput::new(*b"SPARSE_MERKLE_PLACEHOLDER_HASH\0\0");
     }
 
     #[derive(Clone)]
@@ -998,10 +1043,10 @@ pub mod test_utils {
             self
         }
 
-        fn finalize(self) -> crate::hash::HashValue<32> {
+        fn finalize(self) -> crate::hash::HashOutput<32> {
             let mut out = [0u8; 32];
             self.0.finalize(&mut out);
-            HashValue::new(out)
+            HashOutput::new(out)
         }
     }
 }
@@ -1011,10 +1056,10 @@ mod test {
     use proptest::prelude::Arbitrary;
     use serde::ser;
 
-    use crate::{hash::HashValue, types::nibble::Nibble, Key};
+    use crate::{hash::HashOutput, types::nibble::Nibble, Key};
 
     use super::NibbleExt;
-    type TestHashValue = HashValue<TEST_HASH_LENGTH>;
+    type TestHashValue = HashOutput<TEST_HASH_LENGTH>;
     const TEST_HASH_LENGTH: usize = 32;
 
     /// `TestValue` defines the types of data that can be stored in a Jellyfish Merkle tree and used in
@@ -1037,7 +1082,7 @@ mod test {
     impl<T: ser::Serialize + ?Sized> TestOnlyHash for T {
         fn test_only_hash(&self) -> TestHashValue {
             let bytes = bcs::to_bytes(self).expect("serialize failed during hash.");
-            HashValue::sha3_256_of(&bytes)
+            HashOutput::sha3_256_of(&bytes)
         }
     }
 

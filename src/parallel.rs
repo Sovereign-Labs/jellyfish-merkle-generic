@@ -1,8 +1,6 @@
 use crate::{
-    hash::{HashValue, TreeHash},
-    node_type::Node,
-    types::nibble::Nibble,
-    JmtError, Key, NibbleRangeIterator, TreeReader, TreeUpdateBatch,
+    hash::TreeHash, node_type::Node, types::nibble::Nibble, JmtError, Key, NibbleRangeIterator,
+    TreeReader, TreeUpdateBatch, ValueHash,
 };
 
 #[cfg(any(test, feature = "rayon"))]
@@ -15,7 +13,7 @@ pub fn parallel_process_range_if_enabled<
     const N: usize,
 >(
     depth: usize,
-    range_iter: NibbleRangeIterator<Option<&(HashValue<N>, K)>, N>,
+    range_iter: NibbleRangeIterator<Option<&(ValueHash<N>, K)>, N>,
     batch: &'a mut TreeUpdateBatch<K, H, N>,
     mapper: F,
 ) -> Result<Vec<(Nibble, Option<Node<K, H, N>>)>, JmtError<R::Error>>
@@ -68,7 +66,7 @@ pub fn parallel_process_range_if_enabled<
     const N: usize,
 >(
     _depth: usize,
-    range_iter: NibbleRangeIterator<Option<&(HashValue<N>, K)>, N>,
+    range_iter: NibbleRangeIterator<Option<&(ValueHash<N>, K)>, N>,
     batch: &'a mut TreeUpdateBatch<K, H, N>,
     mapper: F,
 ) -> Result<Vec<(Nibble, Option<Node<K, H, N>>)>, JmtError<R::Error>>

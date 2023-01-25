@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    hash::{HashValue, TreeHash},
+    hash::{HashOutput, TreeHash},
     mock_tree_store::MockTreeStore,
     node_type::{LeafNode, MerkleTreeInternalNode},
     proof::SparseMerkleRangeProof,
     test_utils::{TestHash, TestKey},
-    JellyfishMerkleTree, Version,
+    JellyfishMerkleTree, KeyHash, ValueHash, Version,
 };
 
 use proptest::{
@@ -62,18 +62,18 @@ impl TestKey for ValueBlob {}
 // impl crate::TestKey for ValueBlob {}
 // impl crate::TestValue for ValueBlob {}
 
-pub(crate) fn gen_value<const N: usize>() -> (HashValue<N>, ValueBlob) {
+pub(crate) fn gen_value<const N: usize>() -> (ValueHash<N>, ValueBlob) {
     (
-        HashValue::random(),
-        ValueBlob::from(HashValue::<N>::random().to_vec()),
+        ValueHash(HashOutput::random()),
+        ValueBlob::from(HashOutput::<N>::random().to_vec()),
     )
 }
 
 /// Computes the key immediately after `key`.
-pub fn plus_one<const N: usize>(key: HashValue<N>) -> HashValue<N> {
-    assert_ne!(key, HashValue::new([0xFF; N]));
+pub fn plus_one<const N: usize>(key: KeyHash<N>) -> KeyHash<N> {
+    assert_ne!(key, KeyHash(HashOutput::new([0xFF; N])));
 
-    let mut buf = key.to_vec();
+    let mut buf = key.0.to_vec();
     for i in (0..N).rev() {
         if buf[i] == 255 {
             buf[i] = 0;
@@ -82,12 +82,12 @@ pub fn plus_one<const N: usize>(key: HashValue<N>) -> HashValue<N> {
             break;
         }
     }
-    HashValue::from_slice(&buf).unwrap()
+    KeyHash(HashOutput::from_slice(&buf).unwrap())
 }
 
 /// Initializes a DB with a set of key-value pairs by inserting one key at each version.
 pub fn init_mock_db<V, const N: usize>(
-    kvs: &HashMap<HashValue<N>, (HashValue<N>, V)>,
+    kvs: &HashMap<KeyHash<N>, (ValueHash<N>, V)>,
 ) -> (MockTreeStore<V, TestHash, N>, Version)
 where
     V: TestKey,
@@ -111,10 +111,10 @@ where
 pub fn arb_existent_kvs_and_nonexistent_keys<V: TestKey, const N: usize>(
     num_kvs: usize,
     num_non_existing_keys: usize,
-) -> impl Strategy<Value = (HashMap<HashValue<N>, (HashValue<N>, V)>, Vec<HashValue<N>>)> {
+) -> impl Strategy<Value = (HashMap<KeyHash<N>, (ValueHash<N>, V)>, Vec<KeyHash<N>>)> {
     hash_map(
-        any::<HashValue<N>>(),
-        (any::<HashValue<N>>(), any::<V>()),
+        any::<KeyHash<N>>(),
+        (any::<ValueHash<N>>(), any::<V>()),
         1..num_kvs,
     )
     .prop_flat_map(move |kvs| {
@@ -122,7 +122,7 @@ pub fn arb_existent_kvs_and_nonexistent_keys<V: TestKey, const N: usize>(
         (
             Just(kvs),
             vec(
-                any::<HashValue<N>>().prop_filter(
+                any::<KeyHash<N>>().prop_filter(
                     "Make sure these keys do not exist in the tree.",
                     move |key| !kvs_clone.contains_key(key),
                 ),
@@ -133,7 +133,7 @@ pub fn arb_existent_kvs_and_nonexistent_keys<V: TestKey, const N: usize>(
 }
 
 pub fn test_get_with_proof<V: TestKey, const N: usize>(
-    (existent_kvs, nonexistent_keys): (HashMap<HashValue<N>, (HashValue<N>, V)>, Vec<HashValue<N>>),
+    (existent_kvs, nonexistent_keys): (HashMap<KeyHash<N>, (ValueHash<N>, V)>, Vec<KeyHash<N>>),
 ) where
     TestHash: TreeHash<N>,
 {
@@ -146,15 +146,15 @@ pub fn test_get_with_proof<V: TestKey, const N: usize>(
 
 pub fn arb_kv_pair_with_distinct_last_nibble<V: TestKey, const N: usize>() -> impl Strategy<
     Value = (
-        (HashValue<N>, (HashValue<N>, V)),
-        (HashValue<N>, (HashValue<N>, V)),
+        (KeyHash<N>, (ValueHash<N>, V)),
+        (KeyHash<N>, (ValueHash<N>, V)),
     ),
 > {
     (
-        any::<HashValue<N>>().prop_filter("Can't be 0xffffff...", |key| {
-            *key != HashValue::new([0xFF; N])
+        any::<KeyHash<N>>().prop_filter("Can't be 0xffffff...", |key| {
+            *key != KeyHash(HashOutput::new([0xFF; N]))
         }),
-        vec((any::<HashValue<N>>(), any::<V>()), 2),
+        vec((any::<ValueHash<N>>(), any::<V>()), 2),
     )
         .prop_map(|(key1, accounts)| {
             let key2 = plus_one(key1);
@@ -164,8 +164,8 @@ pub fn arb_kv_pair_with_distinct_last_nibble<V: TestKey, const N: usize>() -> im
 
 pub fn test_get_with_proof_with_distinct_last_nibble<V: TestKey, const N: usize>(
     (kv1, kv2): (
-        (HashValue<N>, (HashValue<N>, V)),
-        (HashValue<N>, (HashValue<N>, V)),
+        (KeyHash<N>, (ValueHash<N>, V)),
+        (KeyHash<N>, (ValueHash<N>, V)),
     ),
 ) where
     TestHash: TreeHash<N>,
@@ -182,10 +182,10 @@ pub fn test_get_with_proof_with_distinct_last_nibble<V: TestKey, const N: usize>
 
 pub fn arb_tree_with_index<V: TestKey, const N: usize>(
     tree_size: usize,
-) -> impl Strategy<Value = (BTreeMap<HashValue<N>, (HashValue<N>, V)>, usize)> {
+) -> impl Strategy<Value = (BTreeMap<KeyHash<N>, (ValueHash<N>, V)>, usize)> {
     btree_map(
-        any::<HashValue<N>>(),
-        (any::<HashValue<N>>(), any::<V>()),
+        any::<KeyHash<N>>(),
+        (any::<ValueHash<N>>(), any::<V>()),
         1..tree_size,
     )
     .prop_flat_map(|btree| {
@@ -195,7 +195,7 @@ pub fn arb_tree_with_index<V: TestKey, const N: usize>(
 }
 
 pub fn test_get_range_proof<V: TestKey, const N: usize>(
-    (btree, n): (BTreeMap<HashValue<N>, (HashValue<N>, V)>, usize),
+    (btree, n): (BTreeMap<KeyHash<N>, (ValueHash<N>, V)>, usize),
 ) where
     TestHash: TreeHash<N>,
 {
@@ -214,7 +214,7 @@ pub fn test_get_range_proof<V: TestKey, const N: usize>(
 fn test_existent_keys_impl<'a, V: TestKey, const N: usize>(
     tree: &JellyfishMerkleTree<'a, MockTreeStore<V, TestHash, N>, V, TestHash, N>,
     version: Version,
-    existent_kvs: &HashMap<HashValue<N>, (HashValue<N>, V)>,
+    existent_kvs: &HashMap<KeyHash<N>, (ValueHash<N>, V)>,
 ) where
     TestHash: TreeHash<N>,
 {
@@ -232,7 +232,7 @@ fn test_existent_keys_impl<'a, V: TestKey, const N: usize>(
 fn test_nonexistent_keys_impl<'a, V: TestKey, const N: usize>(
     tree: &JellyfishMerkleTree<'a, MockTreeStore<V, TestHash, N>, V, TestHash, N>,
     version: Version,
-    nonexistent_keys: &[HashValue<N>],
+    nonexistent_keys: &[KeyHash<N>],
 ) where
     TestHash: TreeHash<N>,
 {
@@ -251,8 +251,8 @@ fn test_nonexistent_keys_impl<'a, V: TestKey, const N: usize>(
 
 /// Checks if we can construct the expected root hash using the entries in the btree and the proof.
 fn verify_range_proof<V: TestKey, const N: usize>(
-    expected_root_hash: HashValue<N>,
-    btree: BTreeMap<HashValue<N>, (HashValue<N>, V)>,
+    expected_root_hash: HashOutput<N>,
+    btree: BTreeMap<KeyHash<N>, (ValueHash<N>, V)>,
     proof: SparseMerkleRangeProof<TestHash, N>,
 ) where
     TestHash: TreeHash<N>,
@@ -314,8 +314,8 @@ fn verify_range_proof<V: TestKey, const N: usize>(
         buf.push(true);
         // The rest doesn't matter, because they don't affect the position of the node. We just
         // add zeros.
-        buf.resize(HashValue::<N>::LENGTH_IN_BITS, false);
-        let key = HashValue::from_bit_iter(buf.into_iter()).unwrap();
+        buf.resize(HashOutput::<N>::LENGTH_IN_BITS, false);
+        let key = KeyHash(HashOutput::from_bit_iter(buf.into_iter()).unwrap());
         btree1.insert(key, *sibling);
     }
 
@@ -324,10 +324,10 @@ fn verify_range_proof<V: TestKey, const N: usize>(
     for (key, value) in &btree1 {
         // The length of the common prefix of the previous key and the current key.
         let prev_common_prefix_len =
-            prev_key(&btree1, key).map(|pkey| pkey.common_prefix_bits_len(*key));
+            prev_key(&btree1, key).map(|pkey| pkey.common_prefix_bits_len(key));
         // The length of the common prefix of the next key and the current key.
         let next_common_prefix_len =
-            next_key(&btree1, key).map(|nkey| nkey.common_prefix_bits_len(*key));
+            next_key(&btree1, key).map(|nkey| nkey.common_prefix_bits_len(key));
 
         // We take the longest common prefix of the current key and its neighbors. That's how much
         // we need to keep.
@@ -346,8 +346,8 @@ fn verify_range_proof<V: TestKey, const N: usize>(
 
 /// Reduces the problem by removing the first bit of every key.
 fn reduce<'a, const N: usize>(
-    kvs: &'a [(&[bool], HashValue<N>)],
-) -> Vec<(&'a [bool], HashValue<N>)> {
+    kvs: &'a [(&[bool], HashOutput<N>)],
+) -> Vec<(&'a [bool], HashOutput<N>)> {
     kvs.iter().map(|(key, value)| (&key[1..], *value)).collect()
 }
 
@@ -374,7 +374,7 @@ where
 
 /// Computes the root hash of a sparse Merkle tree. `kvs` consists of the entire set of key-value
 /// pairs stored in the tree.
-fn compute_root_hash<const N: usize>(kvs: Vec<(Vec<bool>, HashValue<N>)>) -> HashValue<N>
+fn compute_root_hash<const N: usize>(kvs: Vec<(Vec<bool>, HashOutput<N>)>) -> HashOutput<N>
 where
     TestHash: TreeHash<N>,
 {
@@ -386,8 +386,8 @@ where
 }
 
 fn compute_root_hash_impl<H: TreeHash<N>, const N: usize>(
-    kvs: Vec<(&[bool], HashValue<N>)>,
-) -> HashValue<N>
+    kvs: Vec<(&[bool], HashOutput<N>)>,
+) -> HashOutput<N>
 where
     TestHash: TreeHash<N>,
 {
@@ -424,7 +424,7 @@ where
     MerkleTreeInternalNode::<TestHash, N>::new(left_hash, right_hash).hash()
 }
 
-pub fn test_get_leaf_count<const N: usize>(keys: HashSet<HashValue<N>>)
+pub fn test_get_leaf_count<const N: usize>(keys: HashSet<KeyHash<N>>)
 where
     TestHash: TreeHash<N>,
 {
@@ -450,7 +450,7 @@ where
 }
 
 pub fn jmt_update_refs<K, const N: usize>(
-    jmt_updates: &[(HashValue<N>, Option<(HashValue<N>, K)>)],
-) -> Vec<(HashValue<N>, Option<&(HashValue<N>, K)>)> {
+    jmt_updates: &[(KeyHash<N>, Option<(ValueHash<N>, K)>)],
+) -> Vec<(KeyHash<N>, Option<&(ValueHash<N>, K)>)> {
     jmt_updates.iter().map(|(x, y)| (*x, y.as_ref())).collect()
 }

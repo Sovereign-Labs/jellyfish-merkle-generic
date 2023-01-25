@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     errors::ProofError,
-    hash::{CryptoHasher, HashValue, TreeHash},
+    hash::{CryptoHasher, HashOutput, TreeHash},
     node_type::MerkleTreeInternalNode,
+    KeyHash, ValueHash,
 };
 
 /// A proof that can be used to authenticate an element in a Sparse Merkle Tree given trusted root
@@ -25,17 +26,17 @@ pub struct SparseMerkleProof<H, const N: usize> {
 
     /// All siblings in this proof, including the default ones. Siblings are ordered from the bottom
     /// level to the root level.
-    siblings: Vec<HashValue<N>>,
+    siblings: Vec<HashOutput<N>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum NodeInProof<H, const N: usize> {
     Leaf(SparseMerkleLeafNode<H, N>),
-    Other(HashValue<N>),
+    Other(HashOutput<N>),
 }
 
-impl<H, const N: usize> From<HashValue<N>> for NodeInProof<H, N> {
-    fn from(hash: HashValue<N>) -> Self {
+impl<H, const N: usize> From<HashOutput<N>> for NodeInProof<H, N> {
+    fn from(hash: HashOutput<N>) -> Self {
         Self::Other(hash)
     }
 }
@@ -47,7 +48,7 @@ impl<H, const N: usize> From<SparseMerkleLeafNode<H, N>> for NodeInProof<H, N> {
 }
 
 impl<H: TreeHash<N>, const N: usize> NodeInProof<H, N> {
-    pub fn hash(&self) -> HashValue<N> {
+    pub fn hash(&self) -> HashOutput<N> {
         match self {
             Self::Leaf(leaf) => leaf.hash(),
             Self::Other(hash) => *hash,
@@ -83,8 +84,8 @@ impl<H: TreeHash<N>, const N: usize> SparseMerkleProofExt<H, N> {
 
     pub fn verify(
         &self,
-        expected_root_hash: HashValue<N>,
-        element_key: HashValue<N>,
+        expected_root_hash: HashOutput<N>,
+        element_key: KeyHash<N>,
         element_value: Option<&[u8]>,
     ) -> Result<(), ProofError<N>> {
         SparseMerkleProof::from(self).verify(expected_root_hash, element_key, element_value)
@@ -92,9 +93,9 @@ impl<H: TreeHash<N>, const N: usize> SparseMerkleProofExt<H, N> {
 
     pub fn verify_by_hash(
         &self,
-        expected_root_hash: HashValue<N>,
-        element_key: HashValue<N>,
-        element_hash: Option<HashValue<N>>,
+        expected_root_hash: HashOutput<N>,
+        element_key: KeyHash<N>,
+        element_hash: Option<ValueHash<N>>,
     ) -> Result<(), ProofError<N>> {
         SparseMerkleProof::from(self).verify_by_hash(expected_root_hash, element_key, element_hash)
     }
@@ -125,7 +126,7 @@ impl<H: TreeHash<N>, const N: usize> From<&SparseMerkleProofExt<H, N>> for Spars
 
 impl<H: TreeHash<N>, const N: usize> SparseMerkleProof<H, N> {
     /// Constructs a new `SparseMerkleProof` using leaf and a list of siblings.
-    pub fn new(leaf: Option<SparseMerkleLeafNode<H, N>>, siblings: Vec<HashValue<N>>) -> Self {
+    pub fn new(leaf: Option<SparseMerkleLeafNode<H, N>>, siblings: Vec<HashOutput<N>>) -> Self {
         SparseMerkleProof { leaf, siblings }
     }
 
@@ -135,20 +136,20 @@ impl<H: TreeHash<N>, const N: usize> SparseMerkleProof<H, N> {
     }
 
     /// Returns the list of siblings in this proof.
-    pub fn siblings(&self) -> &[HashValue<N>] {
+    pub fn siblings(&self) -> &[HashOutput<N>] {
         &self.siblings
     }
 
     pub fn verify(
         &self,
-        expected_root_hash: HashValue<N>,
-        element_key: HashValue<N>,
+        expected_root_hash: HashOutput<N>,
+        element_key: KeyHash<N>,
         element_value: Option<&[u8]>,
     ) -> Result<(), ProofError<N>> {
         self.verify_by_hash(
             expected_root_hash,
             element_key,
-            element_value.map(|v| H::hash(v)),
+            element_value.map(|v| ValueHash(H::hash(v))),
         )
     }
 
@@ -158,11 +159,11 @@ impl<H: TreeHash<N>, const N: usize> SparseMerkleProof<H, N> {
     /// exist in the tree.
     pub fn verify_by_hash(
         &self,
-        expected_root_hash: HashValue<N>,
-        element_key: HashValue<N>,
-        element_hash: Option<HashValue<N>>,
+        expected_root_hash: HashOutput<N>,
+        element_key: KeyHash<N>,
+        element_hash: Option<ValueHash<N>>,
     ) -> Result<(), ProofError<N>> {
-        if self.siblings.len() > HashValue::<N>::LENGTH_IN_BITS {
+        if self.siblings.len() > HashOutput::<N>::LENGTH_IN_BITS {
             return Err(ProofError::TooManySiblings {
                 got: self.siblings.len(),
             });
@@ -183,8 +184,8 @@ impl<H: TreeHash<N>, const N: usize> SparseMerkleProof<H, N> {
                 if hash != leaf.value_hash {
                     return Err(ProofError::ValueMismatch {
                         key: leaf.key,
-                        expected: element_key,
-                        got: leaf.key,
+                        expected: hash,
+                        got: leaf.value_hash,
                     });
                 }
             }
@@ -201,7 +202,7 @@ impl<H: TreeHash<N>, const N: usize> SparseMerkleProof<H, N> {
                         leaf_key: element_key,
                     });
                 }
-                if element_key.common_prefix_bits_len(leaf.key) < self.siblings.len() {
+                if element_key.common_prefix_bits_len(&leaf.key) < self.siblings.len() {
                     return Err(ProofError::InvalidNonInclusionProof {
                         key_in_proof: leaf.key,
                         key_to_verify: element_key,
@@ -226,7 +227,7 @@ impl<H: TreeHash<N>, const N: usize> SparseMerkleProof<H, N> {
                 element_key
                     .iter_bits()
                     .rev()
-                    .skip(HashValue::<N>::LENGTH_IN_BITS - self.siblings.len()),
+                    .skip(HashOutput::<N>::LENGTH_IN_BITS - self.siblings.len()),
             )
             .fold(current_hash, |hash, (sibling_hash, bit)| {
                 if bit {
@@ -272,13 +273,13 @@ impl<H: TreeHash<N>, const N: usize> SparseMerkleProof<H, N> {
 pub struct SparseMerkleRangeProof<H, const N: usize> {
     /// The vector of siblings on the right of the path from root to last leaf. The ones near the
     /// bottom are at the beginning of the vector. In the above example, it's `[X, h]`.
-    right_siblings: Vec<HashValue<N>>,
+    right_siblings: Vec<HashOutput<N>>,
     phantom_hasher: std::marker::PhantomData<H>,
 }
 
 impl<H: TreeHash<N>, const N: usize> SparseMerkleRangeProof<H, N> {
     /// Constructs a new `SparseMerkleRangeProof`.
-    pub fn new(right_siblings: Vec<HashValue<N>>) -> Self {
+    pub fn new(right_siblings: Vec<HashOutput<N>>) -> Self {
         Self {
             right_siblings,
             phantom_hasher: std::marker::PhantomData,
@@ -286,7 +287,7 @@ impl<H: TreeHash<N>, const N: usize> SparseMerkleRangeProof<H, N> {
     }
 
     /// Returns the right siblings.
-    pub fn right_siblings(&self) -> &[HashValue<N>] {
+    pub fn right_siblings(&self) -> &[HashOutput<N>] {
         &self.right_siblings
     }
 
@@ -294,9 +295,9 @@ impl<H: TreeHash<N>, const N: usize> SparseMerkleRangeProof<H, N> {
     /// root hash matches the expected root hash.
     pub fn verify(
         &self,
-        expected_root_hash: HashValue<N>,
+        expected_root_hash: HashOutput<N>,
         rightmost_known_leaf: SparseMerkleLeafNode<H, N>,
-        left_siblings: Vec<HashValue<N>>,
+        left_siblings: Vec<HashOutput<N>>,
     ) -> Result<(), ProofError<N>> {
         let num_siblings = left_siblings.len() + self.right_siblings.len();
         let mut left_sibling_iter = left_siblings.iter();
@@ -307,7 +308,7 @@ impl<H: TreeHash<N>, const N: usize> SparseMerkleRangeProof<H, N> {
             .key()
             .iter_bits()
             .rev()
-            .skip(HashValue::<N>::LENGTH_IN_BITS - num_siblings)
+            .skip(HashOutput::<N>::LENGTH_IN_BITS - num_siblings)
         {
             let (left_hash, right_hash) = if bit {
                 (
@@ -318,7 +319,7 @@ impl<H: TreeHash<N>, const N: usize> SparseMerkleRangeProof<H, N> {
                                 .key()
                                 .iter_bits()
                                 .rev()
-                                .skip(HashValue::<N>::LENGTH_IN_BITS - num_siblings)
+                                .skip(HashOutput::<N>::LENGTH_IN_BITS - num_siblings)
                                 .filter(|b| *b)
                                 .count(),
                             got: left_siblings.clone(),
@@ -335,7 +336,7 @@ impl<H: TreeHash<N>, const N: usize> SparseMerkleRangeProof<H, N> {
                                 .key()
                                 .iter_bits()
                                 .rev()
-                                .skip(HashValue::<N>::LENGTH_IN_BITS - num_siblings)
+                                .skip(HashOutput::<N>::LENGTH_IN_BITS - num_siblings)
                                 .filter(|b| !b)
                                 .count(),
                             got: self.right_siblings.clone(),
@@ -358,8 +359,8 @@ impl<H: TreeHash<N>, const N: usize> SparseMerkleRangeProof<H, N> {
 #[derive(Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
 pub struct SparseMerkleLeafNode<H, const N: usize> {
-    key: HashValue<N>,
-    value_hash: HashValue<N>,
+    key: KeyHash<N>,
+    value_hash: ValueHash<N>,
     phantom_hasher: std::marker::PhantomData<H>,
 }
 // Implement clone manually since Derive is broken.
@@ -381,7 +382,7 @@ impl<H, const N: usize> Clone for SparseMerkleLeafNode<H, N> {
 }
 
 impl<H: TreeHash<N>, const N: usize> SparseMerkleLeafNode<H, N> {
-    pub fn new(key: HashValue<N>, value_hash: HashValue<N>) -> Self {
+    pub fn new(key: KeyHash<N>, value_hash: ValueHash<N>) -> Self {
         SparseMerkleLeafNode {
             key,
             value_hash,
@@ -389,18 +390,18 @@ impl<H: TreeHash<N>, const N: usize> SparseMerkleLeafNode<H, N> {
         }
     }
 
-    pub fn key(&self) -> HashValue<N> {
+    pub fn key(&self) -> KeyHash<N> {
         self.key
     }
 
-    pub fn value_hash(&self) -> HashValue<N> {
+    pub fn value_hash(&self) -> ValueHash<N> {
         self.value_hash
     }
 
-    pub fn hash(&self) -> HashValue<N> {
+    pub fn hash(&self) -> HashOutput<N> {
         H::hasher()
-            .update(self.key.as_ref())
-            .update(self.value_hash.as_ref())
+            .update(self.key.0.as_ref())
+            .update(self.value_hash.0.as_ref())
             .finalize()
     }
 }

@@ -1,6 +1,9 @@
 use thiserror::Error;
 
-use crate::hash::{HashValue, HashValueParseError};
+use crate::{
+    hash::{HashOutput, HashValueParseError},
+    KeyHash, ValueHash,
+};
 
 #[derive(Debug, Error)]
 pub enum CodecError {
@@ -46,47 +49,47 @@ pub enum InternalNodeConstructionError {
 
 #[derive(Debug, Error)]
 pub enum ProofError<const N: usize> {
-    #[error("SMT proof has {got:} siblings, but no more than {:} are allowed", HashValue::<N>::LENGTH_IN_BITS)]
+    #[error("SMT proof has {got:} siblings, but no more than {:} are allowed", HashOutput::<N>::LENGTH_IN_BITS)]
     TooManySiblings { got: usize },
     #[error("Keys do not match. Key in proof: {got:}. Expected key: {expected:}")]
     KeyMismatch {
-        expected: HashValue<N>,
-        got: HashValue<N>,
+        expected: KeyHash<N>,
+        got: KeyHash<N>,
     },
 
     #[error("value hashes do not match for key {key:}. value hash in proof: {got:}. Expected value hash: {expected:}")]
     ValueMismatch {
-        key: HashValue<N>,
-        expected: HashValue<N>,
-        got: HashValue<N>,
+        key: KeyHash<N>,
+        expected: ValueHash<N>,
+        got: ValueHash<N>,
     },
     #[error("Expected inclusion proof, value hash: {value_hash:}. Found non-inclusion proof.")]
-    ExpectedInclusionProof { value_hash: HashValue<N> },
+    ExpectedInclusionProof { value_hash: ValueHash<N> },
     #[error("Expected non-inclusion proof, but key exists in proof. Key: {leaf_key:}")]
-    ExpectedNonInclusionProof { leaf_key: HashValue<N> },
+    ExpectedNonInclusionProof { leaf_key: KeyHash<N> },
     #[error("Invalid non-inclusion proof. Inserting key {key_to_verify:} would not yield a subtree with only a single element. Key in proof {key_in_proof:}")]
     InvalidNonInclusionProof {
-        key_in_proof: HashValue<N>,
-        key_to_verify: HashValue<N>,
+        key_in_proof: KeyHash<N>,
+        key_to_verify: KeyHash<N>,
     },
     #[error(
         "The proof was well-formed but yielded the wrong root. Expected {expected:}, got {got:}"
     )]
     IncorrectRoot {
-        expected: HashValue<N>,
-        got: HashValue<N>,
+        expected: HashOutput<N>,
+        got: HashOutput<N>,
     },
 
     #[error("Not enough left siblings were provided. Needed {needed:} siblings, got {got:?}")]
     MissingLeftSibling {
         needed: usize,
-        got: Vec<HashValue<N>>,
+        got: Vec<HashOutput<N>>,
     },
 
     #[error("Not enough right siblings were provided. Needed {needed:} siblings, got {got:?}")]
     MissingRightSibling {
         needed: usize,
-        got: Vec<HashValue<N>>,
+        got: Vec<HashOutput<N>>,
     },
 }
 
