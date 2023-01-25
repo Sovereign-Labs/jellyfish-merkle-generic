@@ -37,7 +37,6 @@ use serde::{Deserialize, Serialize};
 /// The unique key of each node.
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 #[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
-// TODO: Switch to NewType pattern wrapping PhysicalNodeKey
 pub struct NodeKey<const N: usize> {
     // The version at which the node is created.
     version: Version,
