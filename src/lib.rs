@@ -72,6 +72,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
+    fmt::Debug,
     marker::PhantomData,
 };
 
@@ -119,6 +120,7 @@ pub trait Key:
     + Sync
     + PartialEq
     + 'static
+    + Debug
 {
     type FromBytesErr: std::error::Error + Sized;
     fn key_size(&self) -> usize;

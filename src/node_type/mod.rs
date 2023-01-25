@@ -14,7 +14,10 @@ use crate::{
     hash::{CryptoHasher, HashValue, TreeHash},
     metrics::{inc_internal_encoded_bytes_if_enabled, inc_leaf_encoded_bytes_if_enabled},
     proof::{NodeInProof, SparseMerkleLeafNode},
-    types::nibble::{self, nibble_path::NibblePath, Nibble},
+    types::nibble::{
+        nibble_path::{NibblePath, PhysicalNibblePath},
+        Nibble,
+    },
     Key, TreeReader, Version,
 };
 
@@ -34,11 +37,47 @@ use serde::{Deserialize, Serialize};
 /// The unique key of each node.
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 #[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
+// TODO: Switch to NewType pattern wrapping PhysicalNodeKey
 pub struct NodeKey<const N: usize> {
     // The version at which the node is created.
     version: Version,
     // The nibble path this node represents in the tree.
     nibble_path: NibblePath<N>,
+}
+
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
+#[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
+/// A type-erased [`NodeKey`] - with no knowledge of the JMTs hash function or digest size.
+/// Allows the creation of database abstractions without excessive generics.
+pub struct PhysicalNodeKey {
+    // The version at which the node is created.
+    version: Version,
+    // The nibble path this node represents in the tree.
+    nibble_path: PhysicalNibblePath,
+}
+
+impl<const N: usize> TryFrom<PhysicalNodeKey> for NodeKey<N> {
+    type Error = CodecError;
+
+    fn try_from(value: PhysicalNodeKey) -> Result<Self, Self::Error> {
+        Ok(Self {
+            version: value.version,
+            nibble_path: value.nibble_path.try_into()?,
+        })
+    }
+}
+
+impl PhysicalNodeKey {
+    pub fn version(&self) -> Version {
+        self.version
+    }
+
+    pub fn nibble_path(&self) -> &PhysicalNibblePath {
+        &self.nibble_path
+    }
+    pub fn unpack(self) -> (Version, PhysicalNibblePath) {
+        (self.version, self.nibble_path)
+    }
 }
 
 impl<const N: usize> NodeKey<N> {
@@ -174,7 +213,7 @@ pub struct Child<const N: usize> {
     pub node_type: NodeType,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 /// A type-erased [`Child`] - with no knowledge of the JMTs hash function or digest size.
 /// Allows the creation of database abstractions without excessive generics.
 ///
@@ -257,7 +296,7 @@ impl<H, const N: usize> Clone for InternalNode<H, N> {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 /// A type-erased [`InternalNode`] - with no knowledge of the JMTs hash function or digest size.
 /// Allows the creation of database abstractions without excessive generics.
 pub struct PartialInternalNode {
@@ -725,7 +764,7 @@ pub struct LeafNode<K, H, const N: usize> {
     phantom_hasher: std::marker::PhantomData<H>,
 }
 
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
 /// A type-erased [`LeafNode`] - with no knowledge of the JMTs hash function or digest size.
 /// Allows the creation of database abstractions without excessive generics.
 pub struct PartialLeafNode<K> {
@@ -873,6 +912,7 @@ impl NodeTag {
         })
     }
 
+    #[cfg(any(test, feature = "fuzzing"))]
     pub fn to_u8(&self) -> u8 {
         *self as u8
     }
@@ -1011,10 +1051,10 @@ where
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 /// A type-erased [`Node`] - with no knowledge of the JMTs hash function or digest size.
 /// Allows the creation of database abstractions without excessive generics.
-pub enum PartialNode<K> {
+pub enum PhysicalNode<K> {
     /// A wrapper of [`InternalNode`].
     Internal(PartialInternalNode),
     /// A wrapper of [`LeafNode`].
@@ -1023,14 +1063,14 @@ pub enum PartialNode<K> {
     Null,
 }
 
-impl<K, H, const N: usize> TryFrom<PartialNode<K>> for Node<K, H, N> {
+impl<K, H, const N: usize> TryFrom<PhysicalNode<K>> for Node<K, H, N> {
     type Error = CodecError;
 
-    fn try_from(value: PartialNode<K>) -> Result<Self, Self::Error> {
+    fn try_from(value: PhysicalNode<K>) -> Result<Self, Self::Error> {
         Ok(match value {
-            PartialNode::Internal(n) => Self::Internal(n.try_into()?),
-            PartialNode::Leaf(n) => Self::Leaf(n.try_into()?),
-            PartialNode::Null => Self::Null,
+            PhysicalNode::Internal(n) => Self::Internal(n.try_into()?),
+            PhysicalNode::Leaf(n) => Self::Leaf(n.try_into()?),
+            PhysicalNode::Null => Self::Null,
         })
     }
 }

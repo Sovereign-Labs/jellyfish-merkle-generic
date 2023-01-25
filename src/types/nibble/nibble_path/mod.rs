@@ -8,16 +8,60 @@
 mod nibble_path_test;
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest::{collection::vec, prelude::*};
+#[cfg(any(test, feature = "fuzzing"))]
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::{fmt, iter::FromIterator};
 
 // #[cfg(any(test, feature = "fuzzing"))]
 // use crate::TEST_DIGEST_SIZE;
 
+use crate::errors::CodecError;
+
 use super::Nibble;
+
+#[derive(Clone, Hash, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Debug)]
+#[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
+/// A type-erased [`NibblePath`] with no knowledged of the JMTs digest size.
+/// Useful for creating DB abstractions with fewer generics
+pub struct PhysicalNibblePath {
+    /// Indicates the total number of nibbles in bytes. Either `bytes.len() * 2 - 1` or
+    /// `bytes.len() * 2`.
+    // Guarantees intended ordering based on the top-to-bottom declaration order of the struct's
+    // members.
+    num_nibbles: usize,
+    /// The underlying bytes that stores the path, 2 nibbles per byte. If the number of nibbles is
+    /// odd, the second half of the last byte must be 0.
+    bytes: Vec<u8>,
+    // invariant num_nibbles <= ROOT_NIBBLE_HEIGHT
+}
+
+impl PhysicalNibblePath {
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+impl<const N: usize> TryFrom<PhysicalNibblePath> for NibblePath<N> {
+    type Error = CodecError;
+
+    fn try_from(value: PhysicalNibblePath) -> Result<Self, Self::Error> {
+        if value.num_nibbles > 2 * N {
+            return Err(CodecError::NibblePathTooLong {
+                max: 2 * N,
+                got: value.num_nibbles,
+            });
+        }
+        Ok(Self {
+            num_nibbles: value.num_nibbles,
+            bytes: value.bytes,
+        })
+    }
+}
 
 /// NibblePath defines a path in Merkle tree in the unit of nibble (4 bits).
 #[derive(Clone, Hash, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+// TODO: Switch to NewType pattern wrapping PhysicalNibblePath
 pub struct NibblePath<const N: usize> {
     /// Indicates the total number of nibbles in bytes. Either `bytes.len() * 2 - 1` or
     /// `bytes.len() * 2`.
