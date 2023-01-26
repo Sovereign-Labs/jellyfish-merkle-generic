@@ -91,7 +91,6 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 use types::nibble::{nibble_path::NibblePath, Nibble};
 
-pub mod db;
 pub mod errors;
 pub mod hash;
 #[cfg(any(test))]
