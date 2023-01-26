@@ -91,6 +91,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 use types::nibble::{nibble_path::NibblePath, Nibble};
 
+pub mod db;
 pub mod errors;
 pub mod hash;
 #[cfg(any(test))]
@@ -141,6 +142,8 @@ pub trait TreeReader<K, H, const N: usize> {
     /// self.get_node_option(node_key)?.ok_or_else(|| Self::Error::from(format!("Missing node at {:?}.", node_key)))
     /// ```
     fn get_node(&self, node_key: &NodeKey<N>) -> Result<Node<K, H, N>, Self::Error>;
+
+    fn get_value(&self, key: &K, version: Version) -> Result<Vec<u8>, Self::Error>;
 
     /// Gets node given a node key. Returns `None` if the node does not exist.
     fn get_node_option(&self, node_key: &NodeKey<N>) -> Result<Option<Node<K, H, N>>, Self::Error>;
