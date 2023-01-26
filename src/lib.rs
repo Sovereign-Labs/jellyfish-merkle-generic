@@ -142,6 +142,9 @@ pub trait TreeReader<K, H, const N: usize> {
     /// ```
     fn get_node(&self, node_key: &NodeKey<N>) -> Result<Node<K, H, N>, Self::Error>;
 
+    /// Gets an original value for a given key
+    fn get_value(&self, key: &K, version: Version) -> Result<Vec<u8>, Self::Error>;
+
     /// Gets node given a node key. Returns `None` if the node does not exist.
     fn get_node_option(&self, node_key: &NodeKey<N>) -> Result<Option<Node<K, H, N>>, Self::Error>;
 
