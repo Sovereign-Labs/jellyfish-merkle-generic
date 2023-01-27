@@ -64,7 +64,11 @@ where
         Ok(self.data.read().unwrap().0.get(node_key).cloned())
     }
 
-    fn get_value(&self, _key: &K, _v: Version) -> std::result::Result<Vec<u8>, Self::Error> {
+    fn get_value(
+        &self,
+        _key: &K,
+        _v: Version,
+    ) -> std::result::Result<Option<Vec<u8>>, Self::Error> {
         unimplemented!()
     }
 
