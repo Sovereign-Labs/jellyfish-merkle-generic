@@ -464,7 +464,7 @@ where
                 )
             })?
         } else {
-            self.batch_update_subtree(
+            self.create_subtree_from_batch(
                 &NodeKey::new_empty_path(version),
                 version,
                 deduped_and_sorted_kvs.as_slice(),
@@ -489,6 +489,8 @@ where
         Ok((root_hash, batch))
     }
 
+    /// Insert a slice of changes into the (sub)tree rooted at `node_key`, keeping a record of updates
+    /// in the provided [`TreeUpdateBatch`]
     fn batch_insert_at(
         &self,
         node_key: &NodeKey<N>,
@@ -503,10 +505,15 @@ where
 
         match node {
             Node::Internal(internal_node) => {
-                // There is a small possibility that the old internal node is intact.
-                // Traverse all the path touched by `kvs` from this internal node.
                 let range_iter = NibbleRangeIterator::new(kvs, depth);
-                let mapper =
+                // Build the children of this node by recursively inserting.
+                // Equivalent to calling
+                //  range_iter.map(|(left, right)| self.insert_at_child(..., left, right, ..., batch))
+                //   .collect::<Result<_, JmtError<R::Error>>>()
+                let new_children: Vec<_> = parallel_process_range_if_enabled::<R, K, H, _, N>(
+                    depth,
+                    range_iter,
+                    batch,
                     |left: usize, right: usize, batch_ref: &mut TreeUpdateBatch<K, H, N>| {
                         self.insert_at_child(
                             node_key,
@@ -519,47 +526,68 @@ where
                             hash_cache,
                             batch_ref,
                         )
-                    };
-
-                let new_children: Vec<_> = parallel_process_range_if_enabled::<R, K, H, _, N>(
-                    depth, range_iter, batch, mapper,
+                    },
                 )?;
 
-                // Reuse the current `InternalNode` in memory to create a new internal node.
                 let mut old_children: Children<N> = internal_node.into();
                 let mut new_created_children = HashMap::new();
+
+                // A nibble is only present in `new_children` if a key was modified that contained that nibble
                 for (child_nibble, child_option) in new_children {
+                    // If a node at that position was created, insert it into new `new_created_children`
                     if let Some(child) = child_option {
                         new_created_children.insert(child_nibble, child);
+                    // Otherwise the node was modified and not created - so it must have been deleted.
+                    // In that case, we don't need to track it any more, so remove it from "old children" as well.
                     } else {
                         old_children.remove(&child_nibble);
                     }
                 }
 
+                // If there are no leftover "old_children" that we need to track and no new children, this is an empty subtree. Return None
                 if old_children.is_empty() && new_created_children.is_empty() {
                     return Ok(None);
-                } else if old_children.len() <= 1 && new_created_children.len() <= 1 {
-                    if let Some((new_nibble, new_child)) = new_created_children.iter().next() {
-                        if let Some((old_nibble, _old_child)) = old_children.iter().next() {
+                }
+
+                // If there's exactly one *new* child and it's a leaf node, then we might not need a branch node.
+                // Check for those special cases:
+                if new_created_children.len() == 1 {
+                    let (new_nibble, new_child) = new_created_children.iter().next().unwrap();
+                    if new_child.is_leaf() {
+                        // If there are no old nodes that still need to be tracked, we don't need a branch node
+                        if old_children.len() == 0 {
+                            return Ok(Some(new_child.clone()));
+                        }
+
+                        // If there was exactly one old child *and* it's getting overwritten by the new child (i.e. it's at the same index),
+                        // then we also don't need a branch node.
+                        if old_children.len() == 1 {
+                            let (old_nibble, _old_child) = old_children.iter().next().unwrap();
                             if old_nibble == new_nibble && new_child.is_leaf() {
                                 return Ok(Some(new_child.clone()));
                             }
-                        } else if new_child.is_leaf() {
-                            return Ok(Some(new_child.clone()));
-                        }
-                    } else {
-                        let (old_child_nibble, old_child) =
-                            old_children.iter().next().expect("must exist");
-                        if old_child.is_leaf() {
-                            let old_child_node_key =
-                                node_key.gen_child_node_key(old_child.version, *old_child_nibble);
-                            let old_child_node = self.reader.get_node(&old_child_node_key)?;
-                            batch.put_stale_node(old_child_node_key, version, &old_child_node);
-                            return Ok(Some(old_child_node));
                         }
                     }
                 }
 
+                // If there is exactly one leaf node leftover from before and we haven't added any new children, then
+                // we also don't need a branch node.
+                if old_children.len() == 1 && new_created_children.len() == 0 {
+                    let (old_child_nibble, old_child) =
+                        old_children.iter().next().expect("must exist");
+                    if old_child.is_leaf() {
+                        // We'll re-use the node body, but its location may change, so we add it to the stale
+                        // node tracker
+                        let old_child_node_key =
+                            node_key.gen_child_node_key(old_child.version, *old_child_nibble);
+                        let old_child_node = self.reader.get_node(&old_child_node_key)?;
+                        batch.put_stale_node(old_child_node_key, version, &old_child_node);
+
+                        return Ok(Some(old_child_node));
+                    }
+                }
+
+                // If we've reached this point, we need a branch node. Create and return it.
                 let mut new_children = old_children;
                 for (child_index, new_child_node) in new_created_children {
                     let new_child_node_key = node_key.gen_child_node_key(version, child_index);
@@ -583,7 +611,7 @@ where
                 if depth == 0 {
                     return Err(JmtError::InvalidNull);
                 }
-                self.batch_update_subtree(node_key, version, kvs, 0, hash_cache, batch)
+                self.create_subtree_from_batch(node_key, version, kvs, 0, hash_cache, batch)
             }
         }
     }
@@ -612,7 +640,7 @@ where
                 hash_cache,
                 batch,
             )?,
-            None => self.batch_update_subtree(
+            None => self.create_subtree_from_batch(
                 &node_key.gen_child_node_key(version, child_index),
                 version,
                 &kvs[left..=right],
@@ -625,6 +653,8 @@ where
         Ok((child_index, new_child_node_option))
     }
 
+    /// A helper function that updates a subtree which currently contains a leaf node. If we're inserting any additional nodes,
+    /// this will require replacing the leaf with a branch node and re-inserting the leaf below that branch.
     fn batch_update_subtree_with_existing_leaf(
         &self,
         node_key: &NodeKey<N>,
@@ -637,84 +667,97 @@ where
     ) -> Result<Option<Node<K, H, N>>, JmtError<R::Error>> {
         let existing_leaf_key = existing_leaf_node.account_key();
 
+        // If we're only inserting one node into this subtree, and it's overwriting the current leaf,
+        // then we won't need to do any recursive work. In this case:
         if kvs.len() == 1 && kvs[0].0 == existing_leaf_key {
+            // Either make a new leaf node from the new value...
             if let (key, Some((value_hash, state_key))) = kvs[0] {
                 let new_leaf_node = Node::new_leaf(key, *value_hash, (state_key.clone(), version));
-                Ok(Some(new_leaf_node))
+                return Ok(Some(new_leaf_node));
+            // ...or delete the leaf node if no new value was provided
             } else {
                 inc_deletion_count_if_enabled(1);
-                Ok(None)
+                return Ok(None);
             }
-        } else {
-            let existing_leaf_bucket = existing_leaf_key.get_nibble(depth);
-            let mut isolated_existing_leaf = true;
-            let mut children = vec![];
-            for (left, right) in NibbleRangeIterator::new(kvs, depth) {
-                let child_index = kvs[left].0.get_nibble(depth);
-                let child_node_key = node_key.gen_child_node_key(version, child_index);
-                if let Some(new_child_node) = if existing_leaf_bucket == child_index {
-                    isolated_existing_leaf = false;
-                    self.batch_update_subtree_with_existing_leaf(
-                        &child_node_key,
-                        version,
-                        existing_leaf_node.clone(),
-                        &kvs[left..=right],
-                        depth + 1,
-                        hash_cache,
-                        batch,
-                    )?
-                } else {
-                    self.batch_update_subtree(
-                        &child_node_key,
-                        version,
-                        &kvs[left..=right],
-                        depth + 1,
-                        hash_cache,
-                        batch,
-                    )?
-                } {
-                    children.push((child_index, new_child_node));
-                }
-            }
-            if isolated_existing_leaf {
-                children.push((existing_leaf_bucket, existing_leaf_node.into()));
-            }
+        }
 
-            if children.is_empty() {
-                Ok(None)
-            } else if children.len() == 1 && children[0].1.is_leaf() {
-                let (_, child) = children.pop().expect("Must exist");
-                Ok(Some(child))
+        // If we couldn't return early, then we have some nodes to insert.
+        // Iterate over them and figure out which subtree they need to go in
+        let existing_leaf_bucket = existing_leaf_key.get_nibble(depth);
+        let mut isolated_existing_leaf = true;
+        let mut children = vec![];
+        for (left, right) in NibbleRangeIterator::new(kvs, depth) {
+            let child_index = kvs[left].0.get_nibble(depth);
+            let child_node_key = node_key.gen_child_node_key(version, child_index);
+            // Some of the nodes might need to get inserted into the subtree containing the existing leaf.
+            // In that case, recursively call this function =
+            let new_child = if existing_leaf_bucket == child_index {
+                isolated_existing_leaf = false;
+                self.batch_update_subtree_with_existing_leaf(
+                    &child_node_key,
+                    version,
+                    existing_leaf_node.clone(),
+                    &kvs[left..=right],
+                    depth + 1,
+                    hash_cache,
+                    batch,
+                )?
             } else {
-                let new_internal_node = InternalNode::new(
-                    children
-                        .into_iter()
-                        .map(|(child_index, new_child_node)| {
-                            let new_child_node_key =
-                                node_key.gen_child_node_key(version, child_index);
-                            let result = (
-                                child_index,
-                                Child::new(
-                                    Self::get_hash(
-                                        &new_child_node_key,
-                                        &new_child_node,
-                                        hash_cache,
-                                    ),
-                                    version,
-                                    new_child_node.node_type(),
-                                ),
-                            );
-                            batch.put_node(new_child_node_key, new_child_node);
-                            result
-                        })
-                        .collect(),
-                );
-                Ok(Some(new_internal_node.into()))
+                // All of the other subtrees are currently empty. Do a standard insertion into each of them.
+                self.create_subtree_from_batch(
+                    &child_node_key,
+                    version,
+                    &kvs[left..=right],
+                    depth + 1,
+                    hash_cache,
+                    batch,
+                )?
+            };
+            if let Some(new_child_node) = new_child {
+                children.push((child_index, new_child_node));
             }
+        }
+
+        // We might not have touched the subtree with the existing leaf. If we didn't,
+        // the previous loop won't have added it into `children`, so we need to add it
+        // separately.
+        if isolated_existing_leaf {
+            children.push((existing_leaf_bucket, existing_leaf_node.into()));
+        }
+
+        // If there are no children in this subtree, don't make anode
+        if children.is_empty() {
+            Ok(None)
+        // If this subtree contains exactly one leaf, just return the leaf
+        } else if children.len() == 1 && children[0].1.is_leaf() {
+            let (_, child) = children.pop().expect("Must exist");
+            Ok(Some(child))
+        } else {
+            // Otherwise, build a new branch node and return it
+            let new_internal_node = InternalNode::new(
+                children
+                    .into_iter()
+                    .map(|(child_index, new_child_node)| {
+                        let new_child_node_key = node_key.gen_child_node_key(version, child_index);
+                        let result = (
+                            child_index,
+                            Child::new(
+                                Self::get_hash(&new_child_node_key, &new_child_node, hash_cache),
+                                version,
+                                new_child_node.node_type(),
+                            ),
+                        );
+                        batch.put_node(new_child_node_key, new_child_node);
+                        result
+                    })
+                    .collect(),
+            );
+            Ok(Some(new_internal_node.into()))
         }
     }
 
-    fn batch_update_subtree(
+    /// Create a new subtree where none existed before
+    fn create_subtree_from_batch(
         &self,
         node_key: &NodeKey<N>,
         version: Version,
@@ -723,60 +766,62 @@ where
         hash_cache: &Option<&HashMap<NibblePath<N>, NodeHash<N>>>,
         batch: &mut TreeUpdateBatch<K, H, N>,
     ) -> Result<Option<Node<K, H, N>>, JmtError<R::Error>> {
+        // If this subtree will only contain a single node, it's either a leaf or Null (if the update was a deletion).
+        // Handle those cases and return early
         if kvs.len() == 1 {
             if let (key, Some((value_hash, state_key))) = kvs[0] {
                 let new_leaf_node = Node::new_leaf(key, *value_hash, (state_key.clone(), version));
-                Ok(Some(new_leaf_node))
+                return Ok(Some(new_leaf_node));
             } else {
-                Ok(None)
+                return Ok(None);
             }
+        }
+
+        // If we reach this point, we need to recursively insert into subtrees, and then create a node based on the result
+        let mut children = vec![];
+        for (left, right) in NibbleRangeIterator::new(kvs, depth) {
+            let child_index = kvs[left].0.get_nibble(depth);
+            let child_node_key = node_key.gen_child_node_key(version, child_index);
+            if let Some(new_child_node) = self.create_subtree_from_batch(
+                &child_node_key,
+                version,
+                &kvs[left..=right],
+                depth + 1,
+                hash_cache,
+                batch,
+            )? {
+                children.push((child_index, new_child_node))
+            }
+        }
+        // If there were no children (all updates were deletions), we don't need to put a node here at all
+        if children.is_empty() {
+            Ok(None)
+        // If there's only a single child and it's a leaf node, we don't need to create an internal node.
+        // Just return the leaf.
+        } else if children.len() == 1 && children[0].1.is_leaf() {
+            let (_, child) = children.pop().expect("Must exist");
+            Ok(Some(child))
         } else {
-            let mut children = vec![];
-            for (left, right) in NibbleRangeIterator::new(kvs, depth) {
-                let child_index = kvs[left].0.get_nibble(depth);
-                let child_node_key = node_key.gen_child_node_key(version, child_index);
-                if let Some(new_child_node) = self.batch_update_subtree(
-                    &child_node_key,
-                    version,
-                    &kvs[left..=right],
-                    depth + 1,
-                    hash_cache,
-                    batch,
-                )? {
-                    children.push((child_index, new_child_node))
-                }
-            }
-            if children.is_empty() {
-                Ok(None)
-            } else if children.len() == 1 && children[0].1.is_leaf() {
-                let (_, child) = children.pop().expect("Must exist");
-                Ok(Some(child))
-            } else {
-                let new_internal_node = InternalNode::new(
-                    children
-                        .into_iter()
-                        .map(|(child_index, new_child_node)| {
-                            let new_child_node_key =
-                                node_key.gen_child_node_key(version, child_index);
-                            let result = (
-                                child_index,
-                                Child::new(
-                                    Self::get_hash(
-                                        &new_child_node_key,
-                                        &new_child_node,
-                                        hash_cache,
-                                    ),
-                                    version,
-                                    new_child_node.node_type(),
-                                ),
-                            );
-                            batch.put_node(new_child_node_key, new_child_node);
-                            result
-                        })
-                        .collect(),
-                );
-                Ok(Some(new_internal_node.into()))
-            }
+            // Otherwise, we need an internal node. Create and return it.
+            let new_internal_node = InternalNode::new(
+                children
+                    .into_iter()
+                    .map(|(child_index, new_child_node)| {
+                        let new_child_node_key = node_key.gen_child_node_key(version, child_index);
+                        let result = (
+                            child_index,
+                            Child::new(
+                                Self::get_hash(&new_child_node_key, &new_child_node, hash_cache),
+                                version,
+                                new_child_node.node_type(),
+                            ),
+                        );
+                        batch.put_node(new_child_node_key, new_child_node);
+                        result
+                    })
+                    .collect(),
+            );
+            Ok(Some(new_internal_node.into()))
         }
     }
 
