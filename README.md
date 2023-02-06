@@ -1,3 +1,8 @@
+# Notice
+
+This package has been relocated to the [Sovereign monorepo](https://github.com/Sovereign-Labs/sovereign/tree/research/jmt). 
+The most recent changes to the repo can be found at that location.
+
 # JMT
 
 This crate is an implementation of a [jellyfish merkle tree,](https://developers.diem.com/papers/jellyfish-merkle-tree/2021-01-14.pdf)
